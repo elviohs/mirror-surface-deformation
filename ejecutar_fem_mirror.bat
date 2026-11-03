@@ -12,7 +12,8 @@ set DATOS="ruta\a\tu\fichero.TXT"
 REM Modos de solido rigido a eliminar: Tx Ty Tz Rx Ry Rz  (0=no, 1=si)
 set RIGID=0 0 1 0 0 0
 
-REM Apertura: circular (Zernike), annular (Mahajan), hexagonal o rectangular (Mahajan-Dai)
+REM Apertura: circular (Zernike), annular (Mahajan), hexagonal o rectangular (Mahajan-Dai),
+REM o elliptical (espejos plegados; ejes con --width/--height)
 set APERTURA=circular
 
 REM Error de superficie: sag (recomendado) o normal
@@ -37,6 +38,11 @@ set UNIDADES=mm
 REM Longitud de onda [nm] y angulo de incidencia [grados] para Strehl
 set LAMBDA=632.8
 set INCIDENCIA=0
+
+REM Descomposicion ISO: rot (revolucion: A, B, C) o cyl (cilindrica/torica: AX, AY, B, CX, CY)
+set FORMA_ISO=rot
+REM Giro de los ejes del cilindro/toro respecto a X/Y [grados]
+set GIRO_EJES=0
 
 REM Tolerancia ISO 10110-5 a comprobar (vacio = no comprobar), p. ej.:
 REM set "ISO=3/900 nm (250 nm/100 nm) RMSi < 30 nm"
@@ -69,6 +75,8 @@ python "%~dp0fem_mirror_analysis.py" %DATOS% ^
     --wavelength %LAMBDA% ^
     --incidence %INCIDENCIA% ^
     --iso-spec "%ISO%" ^
+    --iso-form %FORMA_ISO% ^
+    --iso-axis-angle %GIRO_EJES% ^
     --export "%EXPORTAR%" ^
     --export-surface %EXP_SUPERFICIE% ^
     --export-units %EXP_UNIDADES% ^

@@ -26,7 +26,8 @@ _LOGO_B64 = (
 
 # Aperturas de la GUI → nombre interno en fem_mirror_analysis
 APERTURE_KEYS = {'Circular': 'circular', 'Anular': 'annular',
-                 'Hexagonal': 'hexagonal', 'Rectangular': 'rectangular'}
+                 'Hexagonal': 'hexagonal', 'Rectangular': 'rectangular',
+                 'Elíptica': 'elliptical'}
 APERTURES_ENABLED = tuple(APERTURE_KEYS)
 
 BASIS_TEXT = {
@@ -38,6 +39,8 @@ BASIS_TEXT = {
                   "(H1 pistón, H2-H3 tilts, H4 desenfoque…)."),
     'Rectangular': ("Base: ortonormales rectangulares de Mahajan–Dai (2007); un cuadrado es "
                     "ancho = alto. Orden de Noll (R1 pistón, R2-R3 tilts, R4 desenfoque…)."),
+    'Elíptica': ("Base: Zernike circular en coordenadas escaladas x/a, y/b (ISO/TR 14999-2, "
+                 "6.8.3), p. ej. espejos plegados. Ejes de la elipse paralelos a X e Y."),
 }
 
 
@@ -184,17 +187,20 @@ def run_analysis(params, log, schedule, embed_fig=None, result_store=None):
         optics = None
         if params.get('optics', True):
             try:
+                if params['quantity'] == 'normal':
+                    un_iso = un_ap
+                else:                      # ISO 14999-4:2015, 3.2.1: desviación normal
+                    un_n, _, _ = m.extract_rigid(coor, disp, rigid, quantity='normal')
+                    un_iso = un_n[mask]
                 optics = m.optics_summary(
                     un_ap, an_ap, coords, geom, xy[mask], params['units'],
                     params['wavelength'], params['incidence'],
                     residual=residual if nterms > 0 else None,
                     iso_spec=params.get('iso_spec') or None,
-                    x=coor[:, 0], y=coor[:, 1], z_ap=coor[mask, 2])
+                    x=coor[:, 0], y=coor[:, 1], z_ap=coor[mask, 2], iso_u=un_iso,
+                    iso_form=params.get('iso_form', 'rot'),
+                    axis_angle_deg=params.get('iso_axis', 0.0))
                 log("\n" + "\n".join(optics['lines']) + "\n")
-                if params['quantity'] == 'sag':
-                    log("  (ISO: con «Cambio de sag» los valores son desviación de sagita ΔZ; "
-                        "la norma define la desviación de forma normal a la superficie. "
-                        "En espejos planos coinciden.)\n")
             except Exception as e:
                 log(f"\n⚠ Calidad óptica / ISO 10110-5 no calculadas: {e}\n")
                 optics = None
@@ -507,7 +513,7 @@ class App(tk.Tk):
         frm_ap.columnconfigure(5, weight=1)
 
         self.ap_var = tk.StringVar(value='Circular')
-        apertures = ['Circular', 'Anular', 'Hexagonal', 'Rectangular']
+        apertures = ['Circular', 'Anular', 'Hexagonal', 'Rectangular', 'Elíptica']
         for i, name in enumerate(apertures):
             ttk.Radiobutton(frm_ap, text=name, variable=self.ap_var,
                             value=name, command=self._update_ap_fields).grid(
@@ -577,8 +583,23 @@ class App(tk.Tk):
         self.iso_spec_var = tk.StringVar(value='')
         ttk.Entry(frm_opt, textvariable=self.iso_spec_var, width=50).grid(
             row=1, column=1, columnspan=6, padx=(0, 8), pady=(0, 6), sticky='ew')
-        ttk.Label(frm_opt, text="p. ej.  3/900 nm (250 nm/100 nm) RMSi < 30 nm",
+        ttk.Label(frm_opt, text="p. ej.  3/900 nm (250 nm/100 nm) RMSi < 30 nm   ·   "
+                                "tórica: 3/10;2 (1/-;0,3) ΔS2-dim(5 µrad/5/1)",
                   foreground='gray').grid(row=1, column=7, padx=(0, 8), pady=(0, 6), sticky='w')
+        ttk.Label(frm_opt, text="Descomposición ISO:").grid(
+            row=2, column=0, padx=(8, 4), pady=(0, 6), sticky='w')
+        frm_form = ttk.Frame(frm_opt)
+        frm_form.grid(row=2, column=1, columnspan=7, sticky='w', pady=(0, 6))
+        self.iso_form_var = tk.StringVar(value='rot')
+        ttk.Radiobutton(frm_form, text="De revolución (A, B, C)", variable=self.iso_form_var,
+                        value='rot').grid(row=0, column=0, padx=(0, 12))
+        ttk.Radiobutton(frm_form, text="Cilíndrica / tórica (AX, AY, B, CX, CY)",
+                        variable=self.iso_form_var, value='cyl').grid(row=0, column=1, padx=(0, 12))
+        ttk.Label(frm_form, text="Giro de los ejes [°]:").grid(row=0, column=2, padx=(0, 4))
+        self.iso_axis_var = tk.StringVar(value='0')
+        ttk.Entry(frm_form, textvariable=self.iso_axis_var, width=6).grid(row=0, column=3)
+        ttk.Label(frm_form, text="(valores normales a la superficie, ISO 14999-4:2015)",
+                  foreground='gray').grid(row=0, column=4, padx=(12, 0))
 
         # ── Botón ejecutar ─────────────────────────────────────────────
         frm_btns = ttk.Frame(self)
@@ -684,7 +705,12 @@ class App(tk.Tk):
             'Anular':      ['radius', 'rin', 'cx', 'cy'],
             'Hexagonal':   ['radius', 'hexorient', 'cx', 'cy'],
             'Rectangular': ['width', 'height', 'cx', 'cy'],
+            'Elíptica':    ['width', 'height', 'cx', 'cy'],
         }.get(ap, [])
+        self._ap_extra_widgets['width'][0].configure(
+            text='Eje X (vacío = auto):' if ap == 'Elíptica' else 'Ancho X (vacío = auto):')
+        self._ap_extra_widgets['height'][0].configure(
+            text='Eje Y (vacío = auto):' if ap == 'Elíptica' else 'Alto Y (vacío = auto):')
         self._ap_extra_widgets['radius'][0].configure(
             text='Circunradio (vacío = auto):' if ap == 'Hexagonal' else
                  'Radio exterior (vacío = auto):' if ap == 'Anular' else
@@ -703,7 +729,7 @@ class App(tk.Tk):
         # Base polinómica según la apertura
         if not hasattr(self, 'lbl_basis'):
             return
-        circ = (ap == 'Circular')
+        circ = ap in ('Circular', 'Elíptica')
         for rb in (self.rb_fringe, self.rb_noll, self.rb_pico, self.rb_rms):
             rb.state(['!disabled'] if circ else ['disabled'])
         if not circ:
@@ -735,6 +761,10 @@ class App(tk.Tk):
             return False
         self._cases_path = path
         self._cases = cases or []
+        hu = m.header_units(path)
+        if hu and hu != self.units_var.get():
+            self.units_var.set(hu)
+            self._log(f"Unidades del fichero leídas de la cabecera: {hu}\n")
         if self._cases:
             vals = [f"{c:g}" for c in self._cases]
             self.cb_case.configure(values=vals, state='readonly')
@@ -868,6 +898,11 @@ class App(tk.Tk):
             messagebox.showwarning("Parámetro inválido",
                                    "λ debe ser > 0 nm y la incidencia estar en [0, 90)°.")
             return
+        try:
+            iso_axis = float(self.iso_axis_var.get().replace(',', '.') or 0)
+        except ValueError:
+            messagebox.showwarning("Parámetro inválido", "El giro de los ejes debe ser un número [°].")
+            return
         spec = self.iso_spec_var.get().strip()
         if spec and self.optics_var.get():
             import fem_mirror_analysis as _fm
@@ -912,6 +947,8 @@ class App(tk.Tk):
             'incidence':  inc,
             'optics':     bool(self.optics_var.get()),
             'iso_spec':   spec,
+            'iso_form':   self.iso_form_var.get(),
+            'iso_axis':   iso_axis,
         }
         return params
 
@@ -1483,7 +1520,7 @@ class CombineDialog(tk.Toplevel):
         if not path:
             return
         try:
-            m.save_fem_txt(path, coor, disp, "\n".join(desc))
+            m.save_fem_txt(path, coor, disp, "\n".join(desc), units=self.app.units_var.get())
         except OSError as e:
             messagebox.showerror("No se pudo guardar", str(e), parent=self)
             return

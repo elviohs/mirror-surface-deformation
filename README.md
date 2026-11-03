@@ -13,14 +13,16 @@
   - anular → **Zernike anulares de Mahajan** (1981), con obscuración detectada de la malla
   - hexagonal → **ortonormales hexagonales de Mahajan–Dai** (2006), vértices en ±X o ±Y
   - rectangular (y cuadrada) → **ortonormales rectangulares de Mahajan–Dai** (2007)
+  - elíptica (espejos plegados) → **Zernike circular en coordenadas escaladas** (ISO/TR 14999-2:2019, 6.8.3)
 - **Error de superficie**: cambio de sag Δz (recomendado en espejos curvos, incluye el movimiento en el plano) o desplazamiento normal u·n
 - **Aporte RMS de cada término**, independiente del número de términos ajustados, y RMS/PV residual acumulado
 - Sistema de referencia **global** (Z = eje óptico) o **plano best-fit** (ver [Conceptos](#conceptos))
 - Áreas nodales sin triángulos falsos sobre huecos o entrantes del contorno
 - Ficheros con **varios casos de carga** apilados (1ª columna = nº de caso)
+- **Botón para ANSYS Mechanical** que exporta la cara seleccionada del espejo al formato de entrada, con las unidades en la cabecera
 - Cálculo de **RMS**, **RMS respecto a la media** y **PV** sobre la apertura
 - **Calidad óptica**: error de frente de onda en reflexión (2·cosθ·superficie) con λ y ángulo de incidencia configurables, **Strehl** por Maréchal y numérico, y **PSF** por FFT en unidades de λ/D
-- **ISO 10110-5:2015**: potencia (A), irregularidad (B), irregularidad rotacionalmente invariante (C), RMSt, RMSi, RMSa, PV robusto (PVr) y PV recortado (PV99.8%), notación `3/A(B/C) RMSx < D` y comprobación frente a una tolerancia
+- **ISO 10110-5:2015 / ISO 14999-4:2015**: superficies de revolución (A, B, C) y **cilíndricas o tóricas** (AX, AY, B, CX, CY), RMSt, RMSi, RMSa, PV robusto (PVr), PV recortado (PV99.8%) y **pendientes ΔS / RMSΔS** con G y H, sobre la desviación normal a la superficie y con la potencia exacta para espejos rápidos; notación `3/A(B/C) RMSx < D` o `3/AX;AY(B/CX;CY)` y comprobación frente a una tolerancia
 - **Combinación de casos de carga** calculados con la misma malla: gravedad a cualquier ángulo de elevación a partir de casos a ángulos distintos, u(θ) = cosθ·A + sinθ·B (+C), con comprobación de linealidad y barrido de RMS/PV; o combinación lineal Σ cₖ·uₖ
 - **Exportación a Zemax OpticStudio y QUADOA**: rejilla de sag (Zemax *Grid Sag* `.dat` y nube x, y, z `.csv` para QUADOA) y coeficientes de Zernike de sag en unidades de lente (Fringe Z1–Z37, Standard/Noll y ANSI Z80.28), de la superficie sin sólido rígido o del residuo tras el ajuste
 - **Vista 3D interactiva** de la superficie de deformación con escala Z configurable
@@ -61,7 +63,7 @@ O directamente:
 python gui_fem_mirror.py
 ```
 
-La GUI permite cargar el fichero de datos FEM, configurar los parámetros y ejecutar el análisis con un clic. En el bloque **Calidad óptica e ISO 10110-5** se indican las unidades del fichero, la longitud de onda, el ángulo de incidencia y, opcionalmente, una tolerancia ISO a comprobar. Tras el análisis, el botón 🎨 **Vista 3D** abre una ventana interactiva con la superficie de deformación, y el botón 📄 **Generar informe** crea un documento Word en el idioma seleccionado.
+La GUI permite cargar el fichero de datos FEM, configurar los parámetros y ejecutar el análisis con un clic. En el bloque **Calidad óptica e ISO 10110-5** se indican las unidades del fichero, la longitud de onda, el ángulo de incidencia, la descomposición ISO (de revolución o cilíndrica/tórica, con el giro de los ejes) y, opcionalmente, una tolerancia ISO a comprobar. Tras el análisis, el botón 🎨 **Vista 3D** abre una ventana interactiva con la superficie de deformación, y el botón 📄 **Generar informe** crea un documento Word en el idioma seleccionado.
 
 El botón 🔭 **Exportar Zemax / QUADOA…** abre una ventana para elegir la superficie (sin sólido rígido, por defecto, o residuo tras el ajuste), las unidades de lente, la resolución de la rejilla, la interpolación y el orden de los Zernike; ver [Exportación a Zemax y QUADOA](#exportación-a-zemax-y-quadoa).
 
@@ -87,7 +89,14 @@ Calidad óptica e ISO 10110-5:
 ```bash
 python fem_mirror_analysis.py datos.TXT --nterms 4 --units mm \
     --wavelength 632.8 --incidence 0 \
-    --iso-spec "3/900 nm (250 nm/100 nm) RMSi < 30 nm"
+    --iso-spec "3/900 nm (250 nm/100 nm) RMSi < 30 nm; ΔS2-dim(5 µrad/5/1)"
+```
+
+Espejo tórico (ejes del toro girados 15° respecto a X/Y):
+
+```bash
+python fem_mirror_analysis.py datos.TXT --nterms 4 --iso-form cyl --iso-axis-angle 15 \
+    --iso-spec "3/50 nm;20 nm (20 nm/-;10 nm) RMSi < 5 nm"
 ```
 
 Combinación de casos de gravedad (misma malla; `ruta::caso` para ficheros con varios casos):
@@ -134,14 +143,16 @@ Para un espejo plano exportado con Z = eje óptico las dos opciones dan lo mismo
 
 La normalización solo cambia el valor de los coeficientes: el residuo, su RMS y su PV son los mismos. Las bases anular, hexagonal y rectangular son siempre ortonormales, es decir, con normalización RMS. La columna «Aporte RMS» de la tabla de coeficientes da la contribución de cada término al RMS con cualquier normalización.
 
-### Notas sobre ISO 10110-5
+### Notas sobre ISO 10110-5 e ISO 14999-4
 
-- Las magnitudes son de **superficie** en nm (1 fringe spacing = λ/2).
-- Funciones de ISO 14999-4:2007: tilt = plano best-fit (incluye pistón); RMS = integral sobre la apertura (aquí ponderada por área nodal).
-- La esfera best-fit se aproxima paraxialmente por el término ρ² (se avisa si la superficie es rápida), la parte rotacionalmente invariante (óptimo rms = media azimutal) por un ajuste de polinomios pares en ρ, y el PVr según Evans (Opt. Eng. 48(4), 2009) con los 37 términos Zernike Fringe que recomienda ISO 14999-4. ISO 10110-5:2015 limita el PVr a aperturas circulares; en las demás se calcula y se marca como fuera de norma.
-- PVr acotado entre 6·RMS del residuo y el PV, y PV99.8% (PV recortado del 99,8 % del área, recorte óptimo de las dos colas) según Murphy (Proc. SPIE 12778, 2023), para f_WD y f_WI. La comprobación de tolerancias muestra también B y PV evaluados con PV99.8%, que la revisión de ISO 10110-5 en preparación prevé admitir por defecto.
-- La norma define la desviación de forma normal a la superficie; con «cambio de sag» los valores son desviación de sagita ΔZ. En espejos planos coinciden.
-- No se evalúan las formas cilíndricas/tóricas (AX;AY, CX;CY), las pendientes ΔS con longitud de muestreo, los campos de prueba «(all …)» ni las tolerancias de coeficientes Z(n,m).
+- Las magnitudes son de **superficie** en nm (1 fringe spacing = λ/2), calculadas siempre sobre la **desviación normal a la superficie** u·n̂, como exige ISO 14999-4:2015, 3.2.1, aunque el análisis use «cambio de sag».
+- Funciones de ISO 14999-4:2015: tilt = plano best-fit (incluye pistón); RMS = integral sobre la apertura (aquí ponderada por área nodal).
+- **Superficies de revolución** (`3/A(B/C)`): la potencia f_WS usa la función del cambio de radio de la superficie nominal, 1 − cos α ≈ 1 − √(1 − r²/R²) (ISO/TR 14999-2:2019, 6.8.1), con la esfera best-fit de las coordenadas de los nodos; así no aparece esférica espuria en B en espejos rápidos ni en segmentos fuera de eje. La parte rotacionalmente invariante (óptimo rms = media azimutal) se ajusta con polinomios pares en ρ.
+- **Superficies cilíndricas y tóricas** (`3/AX;AY(B/CX;CY)`, ISO 14999-4:2015, 3.2.3–3.2.13): tilt + twist (x·y), cilindros circulares en X e Y con los radios nominales (AX, AY), irregularidad f_WI,CY (B), partes trasladacionalmente invariantes f_WTI,x(x) y f_WTI,y(y) por polinomios de Legendre (CX, CY) y resto f_WTV (RMSa). Los ejes del cilindro o toro son X e Y del modelo, o girados un ángulo dado. Una indicación con `;` en la potencia activa esta descomposición automáticamente. En segmentos tóricos fuera de eje conviene usar el sistema «Plano best-fit».
+- **Pendientes** `ΔSv,w(F/G/H)` y `RMSΔSv,w(K/L/M)` (ISO 10110-5, 5.2.4.1; ISO 14999-4:2015, cap. 6) sobre f_det = f_WI (o f_WI,CY), interpolada a una rejilla de paso H: 2-dim con un plano en cada cuadrado de lado G contenido en el área de ensayo; 1-dim en X o Y con una recta en cada tramo de longitud G; en ρ o φ se proyecta el gradiente del plano local. Unidades mrad (por defecto), µrad, °, ' o ''. Si la malla FEM no es mucho más fina que G se avisa de que la pendiente no resuelve escalas menores que la malla.
+- PVr según Evans (Opt. Eng. 48(4), 2009) con Z(N≤10) y Z(12,0) (37 términos Fringe, ISO 14999-4:2015, 3.3.19), acotado entre 6·RMS del residuo y el PV, y PV99.8% (PV recortado del 99,8 % del área) según Murphy (Proc. SPIE 12778, 2023), para f_WD y f_WI. La comprobación muestra también B y PV con PV99.8%. ISO 10110-5:2015 limita el PVr a aperturas circulares; en las demás se calcula y se marca como fuera de norma.
+- **Apertura elíptica** (espejos plegados, ISO/TR 14999-2:2019, 6.8.3): las coordenadas se escalan para que la pupila sea circular y se usan Zernike circulares; el informe da Z(2,0), la potencia en el sistema 2·Z(2,0)·cos i y B·cos i.
+- No se evalúan los campos de prueba «(all …)» ni las tolerancias de coeficientes Z(n,m).
 
 ## Exportación a Zemax y QUADOA
 
@@ -175,7 +186,20 @@ El fichero de entrada debe ser un fichero de texto con columnas separadas por es
 ID   X   Y   Z   dX   dY   dZ
 ```
 
-donde `X`, `Y`, `Z` son las coordenadas del nodo y `dX`, `dY`, `dZ` los desplazamientos FEM. Si la primera columna se repite se interpreta como número de caso de carga. Las líneas que empiezan por `#` se ignoran.
+donde `X`, `Y`, `Z` son las coordenadas del nodo y `dX`, `dY`, `dZ` los desplazamientos FEM. Si la primera columna se repite se interpreta como número de caso de carga. Las líneas que empiezan por `#` son comentarios; una línea `# unidades: mm` (o `m`, `µm`, `nm`) fija las unidades del fichero, que la GUI y la consola ajustan solas.
+
+### Exportar desde ANSYS Mechanical
+
+`ansys/exportar_espejo.py` es un script para ANSYS Mechanical (2022 R2 o posterior) que genera este fichero con solo seleccionar la cara del espejo:
+
+1. Resuelve el análisis estructural.
+2. Selecciona la(s) cara(s) del espejo en la vista gráfica, o una *Named Selection* de caras o nodos en el árbol.
+3. Ejecuta el script: pestaña **Automation → Scripting**, abre el fichero y pulsa *Run*; o créalo una vez como botón en **Automation → User Buttons → Manage** (*Button Editor*) pegando su contenido.
+4. Elige dónde guardar el TXT y ábrelo en la GUI.
+
+El script lee el fichero de resultados (`.rst`) con DPF: coordenadas sin deformar y desplazamientos en el sistema **global**, en las unidades del solver (cm, µm, in o ft se convierten a mm), con todos los casos de carga apilados y una cabecera con el análisis, las unidades y el tiempo de cada caso. Si hay varios análisis resueltos usa el que contiene el objeto activo del árbol.
+
+> Pendiente de validar en ANSYS: se ha escrito con la API pública de scripting de Mechanical, pero aún no se ha probado en una instalación real.
 
 ## Estructura del repositorio
 
@@ -186,6 +210,7 @@ donde `X`, `Y`, `Z` son las coordenadas del nodo y `dX`, `dY`, `dZ` los desplaza
 ├── ejecutar_gui_fem.bat       # Acceso rápido a la GUI (Windows)
 ├── ejecutar_fem_mirror.bat    # Acceso rápido al modo consola (Windows)
 ├── instalar_dependencias.bat  # Instalador de dependencias (Windows)
+├── ansys/exportar_espejo.py   # Botón de ANSYS Mechanical: cara del espejo → TXT
 └── docs/                      # Figuras del README
 ```
 
@@ -194,7 +219,8 @@ donde `X`, `Y`, `Z` son las coordenadas del nodo y `dX`, `dY`, `dZ` los desplaza
 Normas:
 
 - ISO 10110-5:2015, *Optics and photonics — Preparation of drawings for optical elements and systems — Part 5: Surface form tolerances*.
-- ISO 14999-4:2007, *Optics and photonics — Interferometric measurement of optical elements and optical systems — Part 4: Interpretation and evaluation of tolerances specified in ISO 10110*.
+- ISO 14999-4:2015, *Optics and photonics — Interferometric measurement of optical elements and optical systems — Part 4: Interpretation and evaluation of tolerances specified in ISO 10110*.
+- ISO/TR 14999-2:2019, *Optics and photonics — Interferometric measurement of optical elements and optical systems — Part 2: Measurement and evaluation techniques*.
 
 Análisis FEM de superficies ópticas:
 

@@ -52,40 +52,52 @@ TXT = {
                         "difracción a esta longitud de onda (criterio de Maréchal)."),
         'opt_note_ndl': ("Superficie sin sólido rígido con Strehl < 0,8: no es limitada por "
                          "difracción a esta λ sin corregir los términos ajustados."),
-        'iso_text': ("Descomposición de la desviación de forma según ISO 10110-5:2015 (Tabla B.2) "
-                     "sobre la apertura, tras quitar tilt. Valores de superficie en nm y en "
-                     "fringe spacings (1 fringe = λ/2 = {fr:g} nm)."),
+        'iso_text': ("Descomposición de la desviación de forma según ISO 10110-5:2015 e "
+                     "ISO 14999-4:2015 ({form}) sobre la apertura, con la desviación normal a la "
+                     "superficie (ISO 14999-4, 3.2.1). Valores de superficie en nm y en fringe "
+                     "spacings (1 fringe = λ/2 = {fr:g} nm)."),
+        'form_rot': "superficie de revolución", 'form_cyl': "superficie cilíndrica o tórica",
         'iso_h': ["Magnitud", "Función", "nm", "fringes"],
-        'iso_rows': [("A · potencia", "PV(f_WS)"), ("B · irregularidad", "PV(f_WI)"),
-                     ("C · irregularidad rot. invariante", "PV(f_WRI)"),
-                     ("PV total", "PV(f_WD)"), ("RMSt · total", "rms(f_WD)"),
-                     ("RMSi · irregularidad", "rms(f_WI)"),
-                     ("RMSa · irreg. asimétrica", "rms(f_WRV)"),
-                     ("PVr · PV robusto", "PVr(f_WD)"),
-                     ("PV99.8% · PV recortado", "PV%(f_WD)"),
-                     ("PV99.8% · irregularidad recortada", "PV%(f_WI)")],
-        'iso_slope': "Pendiente de f_WI (muestreo de la malla FEM): RMS {r:.3g} µrad · máx {m:.3g} µrad.",
+        'iso_lab': {'A': ("A · potencia", "PV(f_WS)"), 'AX': ("AX · potencia en X", "PV(f_WC,x)"),
+                    'AY': ("AY · potencia en Y", "PV(f_WC,y)"), 'B': ("B · irregularidad", "PV(f_WI)"),
+                    'C': ("C · irregularidad rot. invariante", "PV(f_WRI)"),
+                    'CX': ("CX · irreg. trasl. invariante en X", "PV(f_WTI,x)"),
+                    'CY': ("CY · irreg. trasl. invariante en Y", "PV(f_WTI,y)"),
+                    'PV': ("PV total", "PV(f_WD)"), 'RMSt': ("RMSt · total", "rms(f_WD)"),
+                    'RMSi': ("RMSi · irregularidad", "rms(f_WI)"),
+                    'RMSa': ("RMSa · irreg. no invariante", "rms(f_WRV)"),
+                    'PVr': ("PVr · PV robusto", "PVr(f_WD)"),
+                    'PV%': ("PV99.8% · PV recortado", "PV%(f_WD)"),
+                    'PV%_I': ("PV99.8% · irregularidad recortada", "PV%(f_WI)")},
+        'iso_slope': ("Pendiente local de {f} sobre la malla FEM (informativa, sin G/H): "
+                      "RMS {r:.3g} µrad · máx {m:.3g} µrad."),
+        'slope_h': ["Pendiente (ISO 14999-4:2015, 6)", "Máx [µrad]", "RMS [µrad]", "Posiciones"],
         'iso_notation': "Valores medidos en notación ISO: {s}",
         'iso_check': "Comprobación frente a la tolerancia {s}",
-        'iso_ch_h': ["Magnitud", "Medido [nm]", "Tolerancia [nm]", "Resultado"],
-        'ok': "Cumple", 'nok': "No cumple",
-        'iso_method': ("Método: funciones de ISO 14999-4:2007 (3.2–3.3) con RMS ponderado por "
-                       "área nodal. Tilt = plano best-fit (incluye pistón); esfera best-fit "
-                       "aproximada paraxialmente por el término ρ²; parte rotacionalmente "
-                       "invariante (cuyo óptimo rms es la media azimutal) aproximada por "
-                       "polinomios pares en ρ hasta ρ^{nr}; PVr según Evans (Opt. Eng. 48(4), "
-                       "2009), PV del ajuste de 37 Zernike Fringe + 3·RMS del residuo, acotado "
-                       "entre 6·RMS del residuo y el PV (Murphy, Proc. SPIE 12778, 2023); PV99.8% "
-                       "= PV del 99,8 % del área quitando de cada cola lo que minimiza el PV "
-                       "(Murphy 2023). La revisión de ISO 10110-5 en preparación prevé admitir "
-                       "PVr o PV99.8% en lugar del PV máx−mín salvo indicación en el plano."),
-        'pvr_scope': ("* PVr fuera del alcance de ISO 10110-5:2015 (sólo apertura circular): "
-                      "calculado con Zernike sobre el círculo que circunscribe la apertura."),
-        'fast': ("Superficie rápida (semiapertura/R ≈ {s:.2f}): la esfera best-fit paraxial "
-                 "puede desviar A del orden de un {p:.0f} %."),
-        'iso_sag': ("Con «cambio de sag» los valores corresponden a la desviación de sagita ΔZ "
-                    "(ISO 10110-5, 3.2); la norma define la desviación de forma normal a la "
-                    "superficie (3.1). En espejos planos coinciden."),
+        'iso_ch_h': ["Magnitud", "Medido", "Tolerancia", "Resultado"],
+        'ok': "Cumple", 'nok': "No cumple", 'not_eval': "No evaluado",
+        'iso_method': ("Método: funciones de ISO 14999-4:2015 (3.2–3.3) con RMS ponderado por "
+                       "área nodal sobre la desviación normal a la superficie. Revolución: tilt = "
+                       "plano best-fit; potencia con la función del cambio de radio de la esfera "
+                       "nominal, 1 − cos α (≈ 1 − √(1 − r²/R²), ISO/TR 14999-2:2019, 6.8.1); parte "
+                       "rotacionalmente invariante por polinomios pares en ρ hasta ρ^{nr}. "
+                       "Cilíndrica/tórica: tilt + twist (x·y), cilindros circulares en X e Y con "
+                       "los radios nominales y partes trasladacionalmente invariantes por "
+                       "polinomios de Legendre en X e Y. PVr según Evans (Opt. Eng. 48(4), 2009) "
+                       "con Z(N≤10) y Z(12,0), acotado entre 6·RMS del residuo y el PV (Murphy, "
+                       "Proc. SPIE 12778, 2023); PV99.8% = PV del 99,8 % del área (Murphy 2023). "
+                       "Pendientes según ISO 14999-4:2015, cap. 6, sobre f_WI interpolada a una "
+                       "rejilla de paso H."),
+        'pvr_scope': ("* PVr fuera del alcance de ISO 10110-5:2015 (sólo apertura circular y "
+                      "superficies de revolución): calculado con Zernike sobre el círculo que "
+                      "circunscribe la apertura."),
+        'power_exact': ("Potencia con la función exacta del cambio de radio de la superficie "
+                        "nominal (ISO/TR 14999-2:2019, 6.8.1); radio nominal {rad} {u} "
+                        "(semiapertura/R ≈ {s:.3f})."),
+        'ellip': ("Apertura elíptica (ISO/TR 14999-2:2019, 6.8.3): Zernike en coordenadas "
+                  "escaladas; Z(2,0) = {z:.3f} nm; potencia en el sistema 2·Z(2,0)·cos i = "
+                  "{p:.3f} nm; irregularidad B·cos i = {b:.3f} nm."),
+        'axis': "Ejes del cilindro o toro girados {a:g}° respecto a X/Y.",
         'n_pvr': ("El PV total ({pv:.3g} nm) es {r:.1f} veces el PV robusto PVr ({pvr:.3g} nm): "
                   "el PV está dominado por picos locales."),
         'n_iso_fail': "La superficie NO cumple la tolerancia ISO 10110-5 en: {k}.",
@@ -193,40 +205,52 @@ TXT = {
                         "diffraction-limited at this wavelength (Maréchal criterion)."),
         'opt_note_ndl': ("Surface without rigid body motion has Strehl < 0.8: not "
                          "diffraction-limited at this λ unless the fitted terms are corrected."),
-        'iso_text': ("Surface form deviation decomposed according to ISO 10110-5:2015 (Table B.2) "
-                     "over the aperture, after tilt removal. Surface values in nm and in fringe "
+        'iso_text': ("Surface form deviation decomposed according to ISO 10110-5:2015 and "
+                     "ISO 14999-4:2015 ({form}) over the aperture, using the deviation normal to "
+                     "the surface (ISO 14999-4, 3.2.1). Surface values in nm and in fringe "
                      "spacings (1 fringe = λ/2 = {fr:g} nm)."),
+        'form_rot': "rotationally symmetric surface", 'form_cyl': "cylindrical or toric surface",
         'iso_h': ["Quantity", "Function", "nm", "fringes"],
-        'iso_rows': [("A · power deviation", "PV(f_WS)"), ("B · irregularity", "PV(f_WI)"),
-                     ("C · rot. invariant irregularity", "PV(f_WRI)"),
-                     ("Total PV", "PV(f_WD)"), ("RMSt · total", "rms(f_WD)"),
-                     ("RMSi · irregularity", "rms(f_WI)"),
-                     ("RMSa · asymmetric irregularity", "rms(f_WRV)"),
-                     ("PVr · robust PV", "PVr(f_WD)"),
-                     ("PV99.8% · clipped PV", "PV%(f_WD)"),
-                     ("PV99.8% · clipped irregularity", "PV%(f_WI)")],
-        'iso_slope': "Slope of f_WI (FEM mesh sampling): RMS {r:.3g} µrad · max {m:.3g} µrad.",
+        'iso_lab': {'A': ("A · power deviation", "PV(f_WS)"), 'AX': ("AX · power deviation in X", "PV(f_WC,x)"),
+                    'AY': ("AY · power deviation in Y", "PV(f_WC,y)"), 'B': ("B · irregularity", "PV(f_WI)"),
+                    'C': ("C · rot. invariant irregularity", "PV(f_WRI)"),
+                    'CX': ("CX · transl. invariant irregularity in X", "PV(f_WTI,x)"),
+                    'CY': ("CY · transl. invariant irregularity in Y", "PV(f_WTI,y)"),
+                    'PV': ("Total PV", "PV(f_WD)"), 'RMSt': ("RMSt · total", "rms(f_WD)"),
+                    'RMSi': ("RMSi · irregularity", "rms(f_WI)"),
+                    'RMSa': ("RMSa · non-invariant irregularity", "rms(f_WRV)"),
+                    'PVr': ("PVr · robust PV", "PVr(f_WD)"),
+                    'PV%': ("PV99.8% · clipped PV", "PV%(f_WD)"),
+                    'PV%_I': ("PV99.8% · clipped irregularity", "PV%(f_WI)")},
+        'iso_slope': ("Local slope of {f} on the FEM mesh (informative, no G/H): "
+                      "RMS {r:.3g} µrad · max {m:.3g} µrad."),
+        'slope_h': ["Slope (ISO 14999-4:2015, 6)", "Max [µrad]", "RMS [µrad]", "Positions"],
         'iso_notation': "Measured values in ISO notation: {s}",
         'iso_check': "Check against tolerance {s}",
-        'iso_ch_h': ["Quantity", "Measured [nm]", "Tolerance [nm]", "Result"],
-        'ok': "Pass", 'nok': "Fail",
-        'iso_method': ("Method: functions of ISO 14999-4:2007 (3.2–3.3) with RMS weighted by "
-                       "nodal area. Tilt = best-fit plane (includes piston); best-fit sphere "
-                       "approximated paraxially by the ρ² term; rotationally invariant part (whose "
-                       "rms optimum is the azimuthal mean) approximated by even polynomials in ρ "
-                       "up to ρ^{nr}; PVr after Evans (Opt. Eng. 48(4), 2009), PV of a 37-term "
-                       "Fringe Zernike fit + 3·RMS of the residual, bounded between 6·RMS of the "
-                       "residual and PV (Murphy, Proc. SPIE 12778, 2023); PV99.8% = PV of 99.8 % "
-                       "of the area, clipping from each tail so as to minimise PV (Murphy 2023). "
-                       "The ISO 10110-5 revision in preparation plans to allow PVr or PV99.8% "
-                       "instead of max−min PV unless the drawing states otherwise."),
-        'pvr_scope': ("* PVr outside the scope of ISO 10110-5:2015 (circular apertures only): "
-                      "computed with Zernike over the circle circumscribing the aperture."),
-        'fast': ("Fast surface (semi-aperture/R ≈ {s:.2f}): the paraxial best-fit sphere may "
-                 "bias A by about {p:.0f} %."),
-        'iso_sag': ("With “sag change” the values are sagitta deviation ΔZ (ISO 10110-5, 3.2); "
-                    "the standard defines the surface form deviation normal to the surface (3.1). "
-                    "Both coincide for flat mirrors."),
+        'iso_ch_h': ["Quantity", "Measured", "Tolerance", "Result"],
+        'ok': "Pass", 'nok': "Fail", 'not_eval': "Not evaluated",
+        'iso_method': ("Method: functions of ISO 14999-4:2015 (3.2–3.3) with RMS weighted by nodal "
+                       "area on the deviation normal to the surface. Rotationally symmetric: tilt = "
+                       "best-fit plane; power with the radius-change function of the nominal "
+                       "sphere, 1 − cos α (≈ 1 − √(1 − r²/R²), ISO/TR 14999-2:2019, 6.8.1); "
+                       "rotationally invariant part by even polynomials in ρ up to ρ^{nr}. "
+                       "Cylindrical/toric: tilt + twist (x·y), circular cylinders in X and Y with "
+                       "the nominal radii, and translationally invariant parts by Legendre "
+                       "polynomials in X and Y. PVr after Evans (Opt. Eng. 48(4), 2009) with "
+                       "Z(N≤10) and Z(12,0), bounded between 6·RMS of the residual and PV (Murphy, "
+                       "Proc. SPIE 12778, 2023); PV99.8% = PV of 99.8 % of the area (Murphy 2023). "
+                       "Slopes according to ISO 14999-4:2015, clause 6, on f_WI interpolated to a "
+                       "grid of spacing H."),
+        'pvr_scope': ("* PVr outside the scope of ISO 10110-5:2015 (circular apertures and "
+                      "rotationally symmetric surfaces only): computed with Zernike over the circle "
+                      "circumscribing the aperture."),
+        'power_exact': ("Power deviation with the exact radius-change function of the nominal "
+                        "surface (ISO/TR 14999-2:2019, 6.8.1); nominal radius {rad} {u} "
+                        "(semi-aperture/R ≈ {s:.3f})."),
+        'ellip': ("Elliptical aperture (ISO/TR 14999-2:2019, 6.8.3): Zernike in scaled "
+                  "coordinates; Z(2,0) = {z:.3f} nm; power in the system 2·Z(2,0)·cos i = "
+                  "{p:.3f} nm; irregularity B·cos i = {b:.3f} nm."),
+        'axis': "Cylinder or torus axes rotated {a:g}° from X/Y.",
         'n_pvr': ("Total PV ({pv:.3g} nm) is {r:.1f} times the robust PVr ({pvr:.3g} nm): PV is "
                   "dominated by local peaks."),
         'n_iso_fail': "The surface does NOT meet the ISO 10110-5 tolerance on: {k}.",
@@ -746,13 +770,19 @@ def generate_report(data, path, lang='es', units='mm', logo_png=None):
         fr = lam / 2.0
         doc.add_heading(T['s_iso'].format(k=k_sec), level=1)
         k_sec += 1
-        doc.add_paragraph(T['iso_text'].format(fr=fr))
-        keys = ['A', 'B', 'C', 'PV', 'RMSt', 'RMSi', 'RMSa', 'PVr', 'PV%', 'PV%_I']
+        cyl = iso.get('form') == 'cyl'
+        doc.add_paragraph(T['iso_text'].format(fr=fr, form=T['form_cyl' if cyl else 'form_rot']))
+        keys = (['AX', 'AY', 'B', 'CX', 'CY'] if cyl else ['A', 'B', 'C']) + \
+            ['PV', 'RMSt', 'RMSi', 'RMSa', 'PVr', 'PV%', 'PV%_I']
         irows = []
-        for key, (lab, fn) in zip(keys, T['iso_rows']):
+        for key in keys:
             v = iso.get(key)
             if v is None:
                 continue
+            lab, fn = T['iso_lab'][key]
+            if cyl:
+                fn = (fn.replace('f_WD', 'f_WD,CY').replace('f_WI)', 'f_WI,CY)')
+                        .replace('f_WRV', 'f_WTV'))
             if key == 'PVr' and not iso.get('PVr_in_scope', True):
                 lab += ' *'
             irows.append([lab, fn, f"{v:.3f}", f"{v / fr:.4f}"])
@@ -760,13 +790,33 @@ def generate_report(data, path, lang='es', units='mm', logo_png=None):
         extra_notes = []
         if iso.get('PVr') is not None and not iso.get('PVr_in_scope', True):
             extra_notes.append(T['pvr_scope'])
-        if iso.get('sphere_s') and iso['sphere_s'] ** 2 / 4 > 0.01:
-            extra_notes.append(T['fast'].format(s=iso['sphere_s'], p=100 * iso['sphere_s'] ** 2 / 4))
+        if iso.get('power_exact'):
+            import math as _math
+            if cyl:
+                rad = ", ".join(f"R{a_} ≈ {v_:.4g}" for a_, v_ in (('x', iso.get('Rx_nom')),
+                                                                   ('y', iso.get('Ry_nom')))
+                                if v_ is not None and _math.isfinite(v_))
+            else:
+                rad = f"R ≈ {iso['R_nom']:.4g}"
+            extra_notes.append(T['power_exact'].format(rad=rad, u=units, s=iso['sphere_s']))
+        if cyl and iso.get('axis_angle'):
+            extra_notes.append(T['axis'].format(a=iso['axis_angle']))
+        if data.get('aperture') == 'elliptical' and iso.get('Z20') is not None:
+            import math as _math
+            ci = _math.cos(_math.radians(opt.get('incidence') or 0.0))
+            extra_notes.append(T['ellip'].format(z=iso['Z20'], p=2 * iso['Z20'] * ci,
+                                                 b=iso['B'] * ci))
         for en_ in extra_notes:
             pe = doc.add_paragraph(en_)
             pe.runs[0].font.size = Pt(9)
         if iso.get('slope_rms_urad') is not None:
-            doc.add_paragraph(T['iso_slope'].format(r=iso['slope_rms_urad'], m=iso['slope_max_urad']))
+            doc.add_paragraph(T['iso_slope'].format(f='f_WI,CY' if cyl else 'f_WI',
+                                                    r=iso['slope_rms_urad'],
+                                                    m=iso['slope_max_urad']))
+        srows = [[sp['text'], f"{sp['max_mrad'] * 1e3:.3f}", f"{sp['rms_mrad'] * 1e3:.3f}",
+                  f"{sp['n']}"] for sp in iso.get('slopes', []) if sp.get('n')]
+        if srows:
+            _table(doc, srows, header=T['slope_h'], widths=[6.5, 3.0, 3.0, 3.0])
         comma = lang != 'en'
         doc.add_paragraph(T['iso_notation'].format(s=fma.format_iso10110(iso, comma=comma)))
         if opt.get('spec'):
@@ -775,13 +825,19 @@ def generate_report(data, path, lang='es', units='mm', logo_png=None):
                 pw = doc.add_paragraph(f"⚠ {wmsg}")
                 pw.runs[0].font.size = Pt(9)
             if opt['check']:
-                _table(doc, [[k_, f"{m_:.3f}", f"{l_:.3f}", T['ok'] if ok_ else T['nok']]
-                             for k_, m_, l_, ok_ in opt['check']],
-                       header=T['iso_ch_h'], widths=[3.5, 4.0, 4.0, 4.0])
-        for key in ('iso_method',) + (('iso_sag',) if data.get('quantity') == 'sag' else ()):
-            pm = doc.add_paragraph(T[key].format(nr=2 * iso.get('n_radial', 12)))
-            pm.runs[0].font.size = Pt(8.5)
-            pm.runs[0].italic = True
+                crow = []
+                for row in opt['check']:
+                    k_, m_, l_, ok_ = row[:4]
+                    un_ = row[4] if len(row) > 4 else 'nm'
+                    f_ = 1e3 if un_ == 'mrad' else 1.0
+                    u_ = 'µrad' if un_ == 'mrad' else 'nm'
+                    crow.append([k_, '—' if m_ is None else f"{m_ * f_:.3f} {u_}",
+                                 f"{l_ * f_:.3f} {u_}",
+                                 T['not_eval'] if ok_ is None else (T['ok'] if ok_ else T['nok'])])
+                _table(doc, crow, header=T['iso_ch_h'], widths=[4.5, 3.5, 3.5, 3.0])
+        pm = doc.add_paragraph(T['iso_method'].format(nr=2 * iso.get('n_radial', 12)))
+        pm.runs[0].font.size = Pt(8.5)
+        pm.runs[0].italic = True
 
     # ── Observaciones ────────────────────────────────────────────────────────
     notes = []
@@ -818,7 +874,7 @@ def generate_report(data, path, lang='es', units='mm', logo_png=None):
         if iso.get('PVr') and iso['PVr'] > 0 and iso['PV'] / iso['PVr'] > 1.5:
             notes.append(T['n_pvr'].format(pv=iso['PV'], r=iso['PV'] / iso['PVr'], pvr=iso['PVr']))
         if opt.get('check'):
-            bad = [k_ for k_, _, _, ok_ in opt['check'] if not ok_]
+            bad = [row[0] for row in opt['check'] if row[3] is False]
             notes.append(T['n_iso_fail'].format(k=', '.join(bad)) if bad else T['n_iso_ok'])
     if data.get('coverage') is not None and data['coverage'] < 0.82:
         notes.append(T['n_cover'].format(p=100 * data['coverage']))
