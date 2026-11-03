@@ -7,16 +7,24 @@ __pycache__/
 *.TXT
 *.txt
 *.dat
+!requirements.txt
 
-# Resultados generados
+# Resultados generados (figuras, informes Word y exportaciones a Zemax/QUADOA)
 *.png
 *.pdf
+*.docx
+*.csv
 
 # Excel y MATLAB legacy
 *.xls
 *.m
 *.fig
 *.asv
+
+# Carpetas de trabajo locales y copias duplicadas
+Claude outputs/
+resultados HARM/
+*-1.bat
 
 # Windows
 Thumbs.db

@@ -1,0 +1,6 @@
+# Dependencias de mirror-surface-deformation
+# Instalación:  python -m pip install -r requirements.txt
+numpy
+scipy
+matplotlib
+python-docx    # sólo para los informes Word

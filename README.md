@@ -37,6 +37,8 @@
 - matplotlib
 - python-docx (solo para los informes Word)
 
+Están listadas en `requirements.txt`.
+
 Instalación rápida de dependencias en Windows:
 
 ```
@@ -46,7 +48,7 @@ instalar_dependencias.bat
 O directamente:
 
 ```bash
-pip install numpy scipy matplotlib python-docx
+pip install -r requirements.txt
 ```
 
 ## Uso
@@ -210,6 +212,7 @@ El script lee el fichero de resultados (`.rst`) con DPF: coordenadas sin deforma
 ├── ejecutar_gui_fem.bat       # Acceso rápido a la GUI (Windows)
 ├── ejecutar_fem_mirror.bat    # Acceso rápido al modo consola (Windows)
 ├── instalar_dependencias.bat  # Instalador de dependencias (Windows)
+├── requirements.txt           # Dependencias de Python
 ├── ansys/exportar_espejo.py   # Botón de ANSYS Mechanical: cara del espejo → TXT
 └── docs/                      # Figuras del README
 ```
