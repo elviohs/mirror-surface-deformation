@@ -1,0 +1,55 @@
+# Construye el ejecutable de Windows (un único .exe, sin necesidad de Python)
+# y lo adjunta a la versión publicada en GitHub Releases.
+#
+# · Al publicar una versión (Releases → Draft a new release, etiqueta vX.Y.Z)
+#   el .exe se añade a esa versión.
+# · Desde la pestaña Actions («Run workflow») se construye sin publicar: el .exe
+#   queda como artefacto de la ejecución.
+name: Ejecutable de Windows
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller pillow
+
+      - name: Construir el ejecutable
+        run: python build_exe.py
+
+      - name: Autocomprobación del ejecutable (análisis, informes y exportación)
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem dist\*.exe | Select-Object -First 1
+          $out = Join-Path $PWD 'selftest.txt'
+          $p = Start-Process -FilePath $exe.FullName -ArgumentList '--selftest', "`"$out`"" -Wait -PassThru
+          Get-Content $out
+          if ($p.ExitCode -ne 0) { throw "La autocomprobación falló (código $($p.ExitCode))" }
+          "Tamaño: {0:N1} MB" -f ($exe.Length / 1MB)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ejecutable-windows
+          path: dist/*.exe
+
+      - name: Adjuntar el ejecutable a la versión
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
