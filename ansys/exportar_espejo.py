@@ -31,6 +31,7 @@ si algo falla, el mensaje de error indica la línea.
 
 import io
 import os
+import re
 import clr
 
 import mech_dpf
@@ -95,8 +96,22 @@ def _analisis_activo():
     return resueltos[0]
 
 
+def _tipo_geo(gid):
+    """Tipo de la entidad geométrica (texto, p. ej. 'GeoFace') o None si la
+    API no permite consultarlo en esta versión."""
+    try:
+        return str(ExtAPI.DataModel.GeoData.GeoEntityById(gid).Type)
+    except Exception:
+        return None
+
+
 def _nodos_seleccionados(mesh):
-    """Ids de nodos de la selección actual o de la Named Selection activa."""
+    """
+    Ids de nodos de la selección actual o de la Named Selection activa.
+    Devuelve (ids, origen, problema, comprobado): `problema` explica por qué
+    no se exporta; `comprobado` = False si no se pudo verificar que la
+    selección geométrica sean sólo caras.
+    """
     sel = ExtAPI.SelectionManager.CurrentSelection
     origen = "selección actual"
     if sel is None or sel.Ids is None or len(sel.Ids) == 0:
@@ -104,16 +119,37 @@ def _nodos_seleccionados(mesh):
         sel = getattr(obj, 'Location', None)
         origen = "Named Selection «%s»" % getattr(obj, 'Name', '?')
     if sel is None or sel.Ids is None or len(sel.Ids) == 0:
-        return [], origen
+        return [], origen, None, True
     ids = set()
+    comprobado = True
     if sel.SelectionType == SelectionTypeEnum.GeometryEntities:
+        otros = []
+        for gid in sel.Ids:
+            tipo = _tipo_geo(gid)
+            if tipo is None:
+                comprobado = False
+            elif 'face' not in tipo.lower():
+                otros.append(tipo)
+        if otros:
+            # Un cuerpo exportaría también los nodos interiores; una arista o
+            # un vértice, sólo una línea o un punto: no sirven como superficie.
+            return [], origen, ("La %s contiene entidades que no son caras (%s).  Selecciona "
+                                "sólo la(s) cara(s) óptica(s) del espejo." %
+                                (origen, ", ".join(sorted(set(otros))))), True
         for gid in sel.Ids:
             ids.update(mesh.MeshRegionById(gid).NodeIds)
     elif sel.SelectionType == SelectionTypeEnum.MeshNodes:
         ids.update(sel.Ids)
     else:
-        return [], origen
-    return sorted(ids), origen
+        return [], origen, ("La %s no es de caras ni de nodos (tipo %s)." %
+                            (origen, sel.SelectionType)), True
+    return sorted(ids), origen, None, comprobado
+
+
+def _nombre_fichero(texto):
+    """Nombre de fichero válido en Windows a partir del nombre del análisis."""
+    limpio = re.sub(r'[\\/:*?"<>|\s]+', '_', texto or '').strip('._')
+    return limpio or 'analisis'
 
 
 def exportar():
@@ -123,7 +159,10 @@ def exportar():
         _aviso("No hay ningún análisis resuelto (falta el fichero de resultados).", True)
         return
     mesh = ExtAPI.DataModel.MeshDataByName("Global")
-    nodos, origen = _nodos_seleccionados(mesh)
+    nodos, origen, problema, comprobado = _nodos_seleccionados(mesh)
+    if problema:
+        _aviso(problema, True)
+        return
     if not nodos:
         _aviso("Selecciona la(s) cara(s) del espejo en la vista gráfica, o una "
                "Named Selection de caras o nodos en el árbol, y vuelve a pulsar.", True)
@@ -179,7 +218,7 @@ def exportar():
 
     # 4. Fichero
     carpeta = analisis.WorkingDir or os.path.dirname(analisis.ResultFileName)
-    nombre = "espejo_%s.txt" % analisis.Name.replace(' ', '_')
+    nombre = "espejo_%s.txt" % _nombre_fichero(analisis.Name)
     ruta = _pedir_fichero(carpeta, nombre)
     if not ruta:
         return
@@ -221,6 +260,9 @@ def exportar():
                 "(p. ej. nodos de contacto o de otros cuerpos)." % perdidos)
     if unidad_txt == 'desconocida':
         msg += "\n\n⚠ No se pudo leer la unidad: indícala en el programa."
+    if not comprobado:
+        msg += ("\n\n⚠ No se pudo comprobar que la selección sean sólo caras: si "
+                "seleccionaste un cuerpo, el fichero incluye nodos interiores.")
     _aviso(msg)
 
 
