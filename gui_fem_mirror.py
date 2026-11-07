@@ -10,6 +10,12 @@ import traceback
 import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext, messagebox
 
+# En el ejecutable sin consola (PyInstaller --windowed) sys.stdout y
+# sys.stderr son None y cualquier print() fallaría: se redirigen a nulo.
+for _name in ('stdout', 'stderr'):
+    if getattr(sys, _name) is None:
+        setattr(sys, _name, open(os.devnull, 'w', encoding='utf-8'))
+
 # ── Añadir el directorio del script al path para importar fem_mirror_analysis ──
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
@@ -66,15 +72,13 @@ def run_analysis(params, log, schedule, embed_fig=None, result_store=None):
     log          : función log(texto) para escribir en el widget de resultados
     schedule     : función schedule(ms, fn) para ejecutar fn en el hilo principal
     embed_fig    : función embed_fig(fig) para mostrar la figura en la GUI
-                   (si es None se usa plt.show() en ventana externa)
+                   (si es None no se dibuja)
     result_store : lista de un elemento [None] donde se guardan los datos
                    del análisis para la vista 3D posterior
     """
     try:
         import numpy as np
-        import matplotlib
-        matplotlib.use('TkAgg')
-        import matplotlib.pyplot as plt
+        from matplotlib.figure import Figure     # sin pyplot: no deja ventanas ocultas
         import importlib
 
         # ── Importar el módulo de análisis ──────────────────────────────
@@ -177,7 +181,8 @@ def run_analysis(params, log, schedule, embed_fig=None, result_store=None):
             log(f"  std residuo : {m.std_area_weighted(residual, an_ap):.6e}\n")
             log(f"  PV  residuo : {pv_res:.6e}\n\n")
             contrib = m.term_contributions(
-                un_ap, m.build_design_matrix(basis, term_indices, coords, norm), an_ap)
+                un_ap, m.build_design_matrix(basis, term_indices, coords, norm),
+                an_ap if params['wls'] else np.ones_like(an_ap))
             log("\n".join(m.format_fit_table(basis, term_indices, coeffs, contrib)) + "\n")
         else:
             rms_res = m.rms_area_weighted(residual, an_ap)
@@ -225,16 +230,39 @@ def run_analysis(params, log, schedule, embed_fig=None, result_store=None):
             log(f"\n⚠ No se pudieron preparar los datos del informe:\n"
                 f"{traceback.format_exc()}\n")
 
-        # ── 5. Figura ────────────────────────────────────────────────────
+        # ── 5. Resultados para 3D, informe y exportación ─────────────────
+        # Se guardan ANTES de dibujar: un fallo de la figura no los pierde.
+        x, y = coor[:, 0], coor[:, 1]
+        un_res_full = np.full(len(coor), np.nan)
+        un_res_full[mask] = residual
+        valid = ~np.isnan(un_res_full)
+        store = {
+            'x': x, 'y': y, 'z_res': un_res_full, 'valid': valid, 'fam': fam,
+            'rms_res': rms_res, 'pv_res': pv_res, 'nterms': nterms,
+            'aperture': aperture, 'quantity': params['quantity'], 'report': report_data,
+            'export': {
+                'xy': xy[mask], 'un': un_ap,
+                'res': residual if nterms > 0 else None,
+                'w': an_ap, 'geom': geom, 'units': params['units'],
+                'quantity': params['quantity'], 'frame': params['frame'],
+                'fname': params.get('fname'), 'case': params.get('case'),
+            },
+        }
+        if result_store is not None:
+            def _save(st=store):
+                result_store[0] = st
+            schedule(0, _save)
+
+        # ── 6. Figura ────────────────────────────────────────────────────
         log("\nGenerando figura…\n")
 
         def show_fig():
             try:
-                x, y = coor[:, 0], coor[:, 1]
                 import matplotlib.tri as mtri
                 import numpy as np_local
 
-                fig, axes = plt.subplots(1, 3, figsize=(17, 5))
+                fig = Figure(figsize=(17, 5))
+                axes = fig.subplots(1, 3)
                 fig.suptitle('Análisis FEM – Superficie de espejo', fontsize=12)
 
                 # Coordenadas centradas (para contorno de apertura)
@@ -247,7 +275,7 @@ def run_analysis(params, log, schedule, embed_fig=None, result_store=None):
                 if valid_full.sum() > 3:
                     tri_full = m.plot_triangulation(x[valid_full], y[valid_full])
                     cf1 = axes[0].tricontourf(tri_full, un[valid_full], levels=64, cmap=m.surface_cmap())
-                    plt.colorbar(cf1, ax=axes[0], label='Error superficie')
+                    fig.colorbar(cf1, ax=axes[0], label='Error superficie')
                 else:
                     axes[0].text(0.5, 0.5, 'Sin datos válidos', ha='center', va='center',
                                  transform=axes[0].transAxes)
@@ -269,13 +297,10 @@ def run_analysis(params, log, schedule, embed_fig=None, result_store=None):
                     axes[0].format_coord = _fmt0
 
                 # Panel derecho: residuo de Zernike solo en la apertura
-                un_res_full = np_local.full(len(coor), np_local.nan)
-                un_res_full[mask] = residual
-                valid = ~np_local.isnan(un_res_full)
                 if valid.sum() > 3:
                     tri_ap = m.plot_triangulation(x[valid], y[valid])
                     cf2 = axes[1].tricontourf(tri_ap, un_res_full[valid], levels=64, cmap=m.surface_cmap())
-                    plt.colorbar(cf2, ax=axes[1], label='Residuo')
+                    fig.colorbar(cf2, ax=axes[1], label='Residuo')
 
                     # Interpolador para mostrar valor z al pasar el ratón (panel 1)
                     _label1 = f'Residuo {fam}' if nterms > 0 else 'Error (apertura)'
@@ -302,7 +327,7 @@ def run_analysis(params, log, schedule, embed_fig=None, result_store=None):
                     ext = psf['extent']
                     im_psf = axes[2].imshow(psf_log, origin='lower', cmap='inferno',
                                             extent=ext, vmin=-6, vmax=0)
-                    plt.colorbar(im_psf, ax=axes[2], label='log₁₀(PSF / pico ideal)')
+                    fig.colorbar(im_psf, ax=axes[2], label='log₁₀(PSF / pico ideal)')
                     on = 'residuo' if psf['on'] == 'residual' else 'superficie'
                     oq = optics['wfe_residual'] if psf['on'] == 'residual' else optics['wfe_surface']
                     axes[2].set_title(
@@ -358,39 +383,16 @@ def run_analysis(params, log, schedule, embed_fig=None, result_store=None):
                     ax.legend(handles=[leg_data, leg_ap], loc='lower right',
                               fontsize=7, framealpha=0.6)
 
-                plt.tight_layout()
+                fig.tight_layout()
 
-                # Guardar datos para la vista 3D posterior
-                if result_store is not None:
-                    result_store[0] = {
-                        'x':        x,
-                        'y':        y,
-                        'z_res':    un_res_full,
-                        'valid':    valid,
-                        'fam':      fam,
-                        'rms_res':  rms_res,
-                        'pv_res':   pv_res,
-                        'nterms':   nterms,
-                        'aperture': aperture,
-                        'report':   report_data,
-                        'export': {
-                            'xy': xy[mask], 'un': un_ap,
-                            'res': residual if nterms > 0 else None,
-                            'w': an_ap, 'geom': geom, 'units': params['units'],
-                            'quantity': params['quantity'], 'frame': params['frame'],
-                            'fname': params.get('fname'), 'case': params.get('case'),
-                        },
-                    }
-
-                # Mostrar en la GUI (embebida) o en ventana externa
-                # Para guardar la imagen usa el botón 💾 de la barra de navegación inferior.
+                # Mostrar en la GUI (embebida).  Para guardar la imagen usa el
+                # botón 💾 de la barra de navegación inferior.
                 if embed_fig is not None:
                     embed_fig(fig)
-                else:
-                    plt.show()
 
             except Exception:
-                log(f"\n✗ Error al generar figura:\n{traceback.format_exc()}\n")
+                log(f"\n✗ Error al generar la figura (los resultados numéricos, el informe y "
+                    f"la exportación siguen disponibles):\n{traceback.format_exc()}\n")
 
         # Mostrar la figura en el hilo principal de Tk
         schedule(0, show_fig)
@@ -398,8 +400,12 @@ def run_analysis(params, log, schedule, embed_fig=None, result_store=None):
 
     except FileNotFoundError as e:
         log(f"\n✗ Archivo no encontrado: {e}\n")
+    except (ValueError, MemoryError) as e:
+        # Errores de datos o de parámetros: mensaje claro, sin traza de Python
+        log(f"\n✗ Error: {e}\n")
     except Exception:
-        log(f"\n✗ Error durante el análisis:\n{traceback.format_exc()}\n")
+        log(f"\n✗ Error inesperado durante el análisis (por favor, comunícalo con este "
+            f"texto):\n{traceback.format_exc()}\n")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -409,7 +415,12 @@ def run_analysis(params, log, schedule, embed_fig=None, result_store=None):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Análisis FEM – Superficie de espejo")
+        try:
+            import fem_mirror_analysis as _fm
+            ver = f" · v{_fm.__version__}"
+        except Exception:
+            ver = ""
+        self.title(f"Análisis FEM – Superficie de espejo{ver}")
         self.resizable(True, True)
         self.minsize(700, 700)
 
@@ -417,6 +428,8 @@ class App(tk.Tk):
         style.theme_use('clam')
 
         self._result_store = [None]   # datos del último análisis para vista 3D
+        self._running = False         # evita lanzar dos análisis a la vez
+        self._units_auto = False      # unidades puestas desde la cabecera del fichero
 
         self._build_ui()
         self.columnconfigure(0, weight=1)
@@ -530,7 +543,7 @@ class App(tk.Tk):
         frm_zern.grid(row=3, column=0, sticky='ew', **pad)
 
         ttk.Label(frm_zern, text="Número de términos:").grid(row=0, column=0, padx=8, pady=6)
-        self.nterms_var = tk.IntVar(value=3)
+        self.nterms_var = tk.StringVar(value='4')
         sp = ttk.Spinbox(frm_zern, from_=0, to=200, textvariable=self.nterms_var, width=6)
         sp.grid(row=0, column=1, padx=4, pady=6)
         ttk.Label(frm_zern, text="  (0 = solo RMS, sin ajuste)").grid(
@@ -584,7 +597,7 @@ class App(tk.Tk):
         ttk.Entry(frm_opt, textvariable=self.iso_spec_var, width=50).grid(
             row=1, column=1, columnspan=6, padx=(0, 8), pady=(0, 6), sticky='ew')
         ttk.Label(frm_opt, text="p. ej.  3/900 nm (250 nm/100 nm) RMSi < 30 nm   ·   "
-                                "tórica: 3/10;2 (1/-;0,3) ΔS2-dim(5 µrad/5/1)",
+                                "tórica: 3/10;2 (1/-;0,3); λ = 546,07 nm ΔS2-dim(5 µrad/5/1)",
                   foreground='gray').grid(row=1, column=7, padx=(0, 8), pady=(0, 6), sticky='w')
         ttk.Label(frm_opt, text="Descomposición ISO:").grid(
             row=2, column=0, padx=(8, 4), pady=(0, 6), sticky='w')
@@ -751,7 +764,12 @@ class App(tk.Tk):
         Detecta si el fichero contiene varios casos de carga apilados y
         rellena el desplegable.  Devuelve False si el fichero no se puede leer.
         """
-        if getattr(self, '_cases_path', None) == path:
+        try:
+            st = os.stat(path)
+            key = (os.path.abspath(path), st.st_mtime, st.st_size)
+        except OSError:
+            key = None
+        if key is not None and getattr(self, '_cases_path', None) == key:
             return True
         try:
             import fem_mirror_analysis as m
@@ -759,12 +777,27 @@ class App(tk.Tk):
         except Exception as e:
             messagebox.showerror("Error de lectura", f"No se pudo leer el fichero:\n{e}")
             return False
-        self._cases_path = path
+        self._cases_path = key
         self._cases = cases or []
-        hu = m.header_units(path)
-        if hu and hu != self.units_var.get():
+        try:
+            hu = m.header_units(path)
+        except ValueError as e:
+            hu = None
+            messagebox.showwarning("Unidades del fichero",
+                                   f"{e}\n\nSe mantienen las unidades seleccionadas "
+                                   f"({self.units_var.get()}): compruébalas.")
+        if hu:
+            if hu != self.units_var.get():
+                self._log(f"Unidades del fichero leídas de la cabecera: {hu}\n")
             self.units_var.set(hu)
-            self._log(f"Unidades del fichero leídas de la cabecera: {hu}\n")
+            self._units_auto = True
+        elif self._units_auto:
+            # El fichero anterior traía unidades en la cabecera y este no:
+            # no se arrastran (error de ×1000 si eran m y este está en mm).
+            self.units_var.set('mm')
+            self._units_auto = False
+            self._log("El fichero no declara unidades en la cabecera: se vuelve a mm "
+                      "(cámbialas si no son mm).\n")
         if self._cases:
             vals = [f"{c:g}" for c in self._cases]
             self.cb_case.configure(values=vals, state='readonly')
@@ -846,10 +879,15 @@ class App(tk.Tk):
                 messagebox.showerror("Archivo no encontrado", f"No existe el archivo:\n{fname}")
                 return None
 
-        nterms = self.nterms_var.get()
+        try:
+            nterms = int(str(self.nterms_var.get()).strip())
+        except (ValueError, tk.TclError):
+            messagebox.showwarning("Parámetro inválido",
+                                   "El número de términos debe ser un número entero (0 = sin ajuste).")
+            return None
         if nterms < 0:
             messagebox.showwarning("Parámetro inválido", "El número de términos no puede ser negativo.")
-            return
+            return None
 
         # Recoger parámetros de apertura opcionales
         def _val(key):
@@ -863,25 +901,46 @@ class App(tk.Tk):
                                 f"La apertura '{aperture}' todavía no está implementada.")
             return
         conv = self.conv_var.get()
-        if aperture == 'Circular' and conv == 'fringe' and nterms > 37:
+        if aperture in ('Circular', 'Elíptica') and conv == 'fringe' and nterms > 37:
             messagebox.showwarning("Parámetro inválido",
                                    "El conjunto Fringe estándar tiene 37 términos como máximo.")
-            return
-        if aperture != 'Circular' and nterms > 66:
+            return None
+        if nterms > 66:
             messagebox.showwarning("Parámetro inválido",
                                    "Máximo 66 términos (orden radial 10) en esta base.")
-            return
+            return None
 
         # Validar números
-        for key in ('radius', 'rin', 'width', 'height', 'cx', 'cy'):
+        names = {'radius': 'Radio', 'rin': 'Radio interior', 'width': 'Ancho / eje X',
+                 'height': 'Alto / eje Y', 'cx': 'Centro X', 'cy': 'Centro Y'}
+        vis = {
+            'Circular': ('radius', 'cx', 'cy'), 'Anular': ('radius', 'rin', 'cx', 'cy'),
+            'Hexagonal': ('radius', 'cx', 'cy'), 'Rectangular': ('width', 'height', 'cx', 'cy'),
+            'Elíptica': ('width', 'height', 'cx', 'cy')}[aperture]
+        nums = {}
+        for key in vis:
             s = _val(key)
-            if s is not None:
-                try:
-                    float(s.replace(',', '.'))
-                except ValueError:
-                    messagebox.showwarning("Parámetro inválido",
-                                           f"Valor no numérico en '{key}': {s}")
-                    return
+            if s is None:
+                continue
+            try:
+                v = float(s.replace(',', '.'))
+                if v != v or v in (float('inf'), float('-inf')):
+                    raise ValueError
+            except ValueError:
+                messagebox.showwarning("Parámetro inválido",
+                                       f"Valor no numérico en «{names[key]}»: {s}")
+                return None
+            if key in ('radius', 'width', 'height') and v <= 0:
+                messagebox.showwarning("Parámetro inválido", f"«{names[key]}» debe ser mayor que 0.")
+                return None
+            if key == 'rin' and v < 0:
+                messagebox.showwarning("Parámetro inválido", "El radio interior no puede ser negativo.")
+                return None
+            nums[key] = v
+        if 'rin' in nums and 'radius' in nums and nums['rin'] >= nums['radius']:
+            messagebox.showwarning("Parámetro inválido",
+                                   "El radio interior debe ser menor que el exterior.")
+            return None
         if (_val('cx') is None) != (_val('cy') is None):
             messagebox.showwarning("Centro incompleto",
                                    "Indica Centro X y Centro Y, o deja ambos vacíos.")
@@ -925,6 +984,7 @@ class App(tk.Tk):
                 return
 
         params = {
+            'version':    getattr(sys.modules.get('fem_mirror_analysis'), '__version__', ''),
             'fname':      fname,
             'case':       case,
             'rigid':      tuple(int(v.get()) for v in self.rigid_vars),
@@ -935,11 +995,11 @@ class App(tk.Tk):
             'norm':       self.norm_var.get(),
             'convention': conv,
             'wls':        bool(self.wls_var.get()),
-            'radius':     _num('radius'),
-            'rin':        _num('rin'),
+            'radius':     _num('radius') if 'radius' in vis else None,
+            'rin':        _num('rin') if 'rin' in vis else None,
             'hexorient':  'x' if self._ap_extra_widgets['hexorient'][2].get() == '±X' else 'y',
-            'width':      _num('width'),
-            'height':     _num('height'),
+            'width':      _num('width') if 'width' in vis else None,
+            'height':     _num('height') if 'height' in vis else None,
             'cx':         _num('cx'),
             'cy':         _num('cy'),
             'units':      self.units_var.get(),
@@ -953,6 +1013,11 @@ class App(tk.Tk):
         return params
 
     def _start(self, params):
+        if self._running:
+            messagebox.showinfo("Análisis en curso",
+                                "Espera a que termine el análisis actual.")
+            return False
+        self._running = True
         self.btn_run.configure(state='disabled', text="Ejecutando…")
         self.btn_3d.configure(state='disabled')
         self.btn_report.configure(state='disabled')
@@ -961,6 +1026,7 @@ class App(tk.Tk):
         self._result_store[0] = None   # borrar resultado anterior
 
         def _done():
+            self._running = False
             self.btn_run.configure(state='normal', text="▶  Ejecutar análisis")
             if self._result_store[0] is not None:
                 self.btn_3d.configure(state='normal')
@@ -970,12 +1036,15 @@ class App(tk.Tk):
                     self.btn_export.configure(state='normal')
 
         def _thread():
-            run_analysis(params, self._log, self.after,
-                         embed_fig=self._embed_figure,
-                         result_store=self._result_store)
-            self.after(0, _done)
+            try:
+                run_analysis(params, self._log, self.after,
+                             embed_fig=self._embed_figure,
+                             result_store=self._result_store)
+            finally:
+                self.after(0, _done)
 
         threading.Thread(target=_thread, daemon=True).start()
+        return True
 
     def _open_export(self):
         data = self._result_store[0]
@@ -1011,8 +1080,8 @@ class App(tk.Tk):
         import report_fem_mirror as rp
 
         lang = 'en' if self.report_lang_var.get() == 'English' else 'es'
-        units = (data['report'].get('optics') or {}).get('units') or self.units_var.get() or 'mm'
         rep = data['report']
+        units = rep.get('units') or (rep.get('optics') or {}).get('units') or 'mm'
         base = os.path.splitext(os.path.basename(rep.get('fname') or 'analisis'))[0]
         if rep.get('case') is not None:
             base += f"_caso{rep['case']:g}"
@@ -1035,8 +1104,10 @@ class App(tk.Tk):
                                  f"No se puede escribir en:\n{path}\n\n"
                                  "¿Está abierto en Word? Ciérralo e inténtalo de nuevo.")
             return
-        except Exception:
-            messagebox.showerror("Error al generar el informe", traceback.format_exc())
+        except Exception as e:
+            self._log(f"\n✗ Error al generar el informe:\n{traceback.format_exc()}\n")
+            messagebox.showerror("Error al generar el informe",
+                                 f"{e}\n\n(Detalles en el panel de resultados.)")
             return
         finally:
             self.configure(cursor='')
@@ -1072,12 +1143,8 @@ class App(tk.Tk):
                                    "Introduce un número distinto de cero (p.ej. 10E6).")
             return
 
-        import matplotlib
-        matplotlib.use('TkAgg')
-        import matplotlib.pyplot as plt
+        from matplotlib.figure import Figure
         from mpl_toolkits.mplot3d import Axes3D          # noqa: F401
-        import matplotlib.tri as mtri
-        import numpy as _np
         from matplotlib.backends.backend_tkagg import (FigureCanvasTkAgg,
                                                         NavigationToolbar2Tk)
 
@@ -1095,7 +1162,7 @@ class App(tk.Tk):
         zv = z_res[valid] * scale   # amplificado para que sea visible
 
         # ── Figura 3D ─────────────────────────────────────────────────
-        fig = plt.figure(figsize=(9, 7))
+        fig = Figure(figsize=(9, 7))
         ax  = fig.add_subplot(111, projection='3d')
 
         import fem_mirror_analysis as _fm
@@ -1104,8 +1171,9 @@ class App(tk.Tk):
         surf = ax.plot_trisurf(tri, zv, cmap=_fma.surface_cmap(),
                                linewidth=0, antialiased=True, alpha=0.92)
 
+        qlab = 'Δz' if data.get('quantity') == 'sag' else 'u·n'
         cb = fig.colorbar(surf, ax=ax, shrink=0.55, pad=0.1)
-        cb.set_label(f'Despl. normal × {scale:g}', fontsize=8)
+        cb.set_label(f'{"Residuo" if nterms > 0 else "Error"} {qlab} (valores reales)', fontsize=8)
         # Reescalar etiquetas del colorbar a valores reales
         import matplotlib.ticker as mticker
         cb.formatter = mticker.FuncFormatter(lambda v, _: f'{v/scale:.2e}')
@@ -1119,7 +1187,7 @@ class App(tk.Tk):
             fontsize=9)
         ax.set_xlabel('X')
         ax.set_ylabel('Y')
-        ax.set_zlabel(f'Despl. × {scale:g}')
+        ax.set_zlabel(f'{qlab} × {scale:g}')
 
         # Relación de aspecto: X e Y a escala real; Z amplificado
         x_range = xv.max() - xv.min()
@@ -1127,7 +1195,7 @@ class App(tk.Tk):
         z_range = zv.max() - zv.min() if (zv.max() - zv.min()) > 0 else 1.0
         ax.set_box_aspect([x_range, y_range, z_range * 0.3])  # Z más comprimido visualmente
 
-        plt.tight_layout()
+        fig.tight_layout()
 
         # ── Embeber en un Toplevel Tk para no bloquear la GUI ─────────
         top = tk.Toplevel(self)
@@ -1267,8 +1335,10 @@ class ExportDialog(tk.Toplevel):
                 source=os.path.basename(fname) + (f" · caso {exp['case']:g}"
                                                   if exp.get('case') is not None else ''),
                 frame=exp['frame'])
-        except Exception:
-            messagebox.showerror("Error al exportar", traceback.format_exc(), parent=self)
+        except Exception as e:
+            self.app._log(f"\n✗ Error al exportar:\n{traceback.format_exc()}\n")
+            messagebox.showerror("Error al exportar",
+                                 f"{e}\n\n(Detalles en el panel de resultados.)", parent=self)
             return
         finally:
             self.configure(cursor='')
@@ -1301,6 +1371,7 @@ class CombineDialog(tk.Toplevel):
         self.rowconfigure(1, weight=1)
         self.items = []                     # (ruta, caso, valor)
         self._new_cases = []
+        self._mode_prev = 'gravity'
         pad = dict(padx=8, pady=4)
 
         frm_mode = ttk.LabelFrame(self, text="Tipo de combinación")
@@ -1386,7 +1457,23 @@ class CombineDialog(tk.Toplevel):
 
     # ── utilidades ──────────────────────────────────────────────────
     def _update_mode(self):
-        grav = self.mode_var.get() == 'gravity'
+        mode = self.mode_var.get()
+        if self.items and mode != self._mode_prev:
+            # Los valores de la lista son ángulos o coeficientes según el modo:
+            # no se pueden reutilizar al cambiar de tipo de combinación.
+            if not messagebox.askyesno(
+                    "Cambiar el tipo de combinación",
+                    "Los valores de la lista son " +
+                    ("ángulos" if self._mode_prev == 'gravity' else "coeficientes") +
+                    " y no sirven para el otro tipo.\n\n¿Vaciar la lista y cambiar?",
+                    parent=self):
+                self.mode_var.set(self._mode_prev)
+                return
+            self.items.clear()
+            for it in self.tree.get_children():
+                self.tree.delete(it)
+        self._mode_prev = mode
+        grav = mode == 'gravity'
         txt = 'Ángulo [°]' if grav else 'Coeficiente'
         self.tree.heading('val', text=txt)
         self.lbl_val.configure(text=txt + ':')
@@ -1447,7 +1534,12 @@ class CombineDialog(tk.Toplevel):
             if not t and k in allow_empty:
                 out.append(None)
                 continue
-            out.append(float(t))
+            if not t:
+                raise ValueError("Falta un valor numérico (ángulo o paso).")
+            try:
+                out.append(float(t))
+            except ValueError:
+                raise ValueError(f"Valor no numérico: «{v.get().strip()}».") from None
         return out
 
     def _load(self):
@@ -1457,11 +1549,22 @@ class CombineDialog(tk.Toplevel):
             raise ValueError("Añade al menos 2 casos (3 con término constante).")
         if not self.items:
             raise ValueError("Añade al menos un caso.")
-        coor, disps = None, []
+        coor, disps, units = None, [], set()
         for path, case, _ in self.items:
             c, d = m.load_case_aligned(path, case, coor)
             coor = c if coor is None else coor
             disps.append(d)
+            units.add(m.header_units(path))
+        known = {u for u in units if u}
+        if len(known) > 1:
+            raise ValueError("Los casos declaran unidades distintas en la cabecera "
+                             f"({', '.join(sorted(known))}): deben estar en las mismas.")
+        if known and None in units:
+            raise ValueError(f"Unos casos declaran unidades ({known.pop()}) y otros no: "
+                             "revisa las cabeceras «# unidades:».")
+        # Unidades de los ficheros de origen (cabecera) o, si no las declaran,
+        # las seleccionadas en la ventana principal
+        self._src_units = known.pop() if known else self.app.units_var.get()
         return coor, disps
 
     def _gravity_basis(self, coor, disps):
@@ -1472,22 +1575,26 @@ class CombineDialog(tk.Toplevel):
             mis = ", ".join(f"{a:g}°: {e*100:.2f}%" for a, e in zip(angles, gb['misfit']))
             worst = max(gb['misfit'])
             msg = f"Linealidad (desajuste por caso): {mis}"
+            msg_en = f"Linearity (misfit per case): {mis}"
             if worst > 0.02:
                 msg += "  ⚠ > 2 %: revisa que los casos sean sólo gravedad o añade C."
+                msg_en += "  ⚠ > 2 %: check that the cases are gravity only, or add C."
         else:
             msg = "Sin casos redundantes: la linealidad no se puede comprobar."
+            msg_en = "No redundant cases: linearity cannot be checked."
+        self._msg_en = msg_en
         return gb, msg
 
-    def _desc(self):
+    def _desc(self, lang='es'):
         mode = self.mode_var.get()
         parts = [f"{os.path.basename(p)}{'' if c is None else f'::{c:g}'}"
                  for p, c, _ in self.items]
         if mode == 'gravity':
-            return ("Gravedad: " + ", ".join(f"{n} @ {v:g}°" for n, (_, _, v)
-                                            in zip(parts, self.items))
+            return (("Gravity: " if lang == 'en' else "Gravedad: ")
+                    + ", ".join(f"{n} @ {v:g}°" for n, (_, _, v) in zip(parts, self.items))
                     + (" + C" if self.const_var.get() else ""))
-        return "Combinación lineal: " + " + ".join(f"{v:g}·[{n}]" for n, (_, _, v)
-                                                     in zip(parts, self.items))
+        return (("Linear combination: " if lang == 'en' else "Combinación lineal: ")
+                + " + ".join(f"{v:g}·[{n}]" for n, (_, _, v) in zip(parts, self.items)))
 
     # ── acciones ────────────────────────────────────────────────────
     def _generate(self):
@@ -1498,11 +1605,14 @@ class CombineDialog(tk.Toplevel):
         try:
             coor, disps = self._load()
             desc = [self._desc()]
+            desc_en = [self._desc('en')]
             if self.mode_var.get() == 'gravity':
                 tgt, ref = self._floats(self.target_var, self.ref_var, allow_empty=(1,))
                 gb, msg = self._gravity_basis(coor, disps)
                 disp = m.gravity_combination(gb, tgt, ref)
                 desc += [msg, f"Ángulo {tgt:g}°" + (f" respecto a {ref:g}°" if ref is not None else "")]
+                desc_en += [self._msg_en, f"Angle {tgt:g}°" +
+                            (f" relative to {ref:g}°" if ref is not None else "")]
                 tag = f"{tgt:g}deg" + (f"_ref{ref:g}" if ref is not None else "")
             else:
                 disp = m.linear_combination(disps, [v for _, _, v in self.items])
@@ -1520,7 +1630,7 @@ class CombineDialog(tk.Toplevel):
         if not path:
             return
         try:
-            m.save_fem_txt(path, coor, disp, "\n".join(desc), units=self.app.units_var.get())
+            m.save_fem_txt(path, coor, disp, "\n".join(desc), units=self._src_units)
         except OSError as e:
             messagebox.showerror("No se pudo guardar", str(e), parent=self)
             return
@@ -1531,8 +1641,9 @@ class CombineDialog(tk.Toplevel):
         if params is None:
             return
         params['combo_desc'] = desc
-        self.app._start(params)
-        self.app._log("Caso combinado: " + " · ".join(desc) + f"\n  → {path}\n\n")
+        params['combo_desc_en'] = desc_en
+        if self.app._start(params):
+            self.app._log("Caso combinado: " + " · ".join(desc) + f"\n  → {path}\n\n")
 
     def _sweep(self):
         import numpy as np
@@ -1550,6 +1661,7 @@ class CombineDialog(tk.Toplevel):
         except ValueError as e:
             messagebox.showerror("Barrido", str(e), parent=self)
             return
+        params['units'] = self._src_units
         self.lbl_status.configure(text=msg)
         if params['frame'] == 'bestfit':
             coor_r, _, info = m.to_local_frame(coor, np.zeros_like(coor))
@@ -1573,8 +1685,13 @@ class CombineDialog(tk.Toplevel):
                                      quantity=params['quantity'], aperture=ap_key,
                                      aperture_kw=ap_kw, basis=basis, terms=terms,
                                      norm=norm, wls=params['wls'])
-        except Exception:
-            messagebox.showerror("Barrido", traceback.format_exc(), parent=self)
+        except ValueError as e:
+            messagebox.showerror("Barrido", str(e), parent=self)
+            return
+        except Exception as e:
+            self.app._log(f"\n✗ Error en el barrido:\n{traceback.format_exc()}\n")
+            messagebox.showerror("Barrido", f"{e}\n\n(Detalles en el panel de resultados.)",
+                                 parent=self)
             return
         finally:
             self.configure(cursor='')
@@ -1631,9 +1748,114 @@ class CombineDialog(tk.Toplevel):
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  AUTOCOMPROBACIÓN (ejecutable y CI)
+# ═══════════════════════════════════════════════════════════════════
+
+def selftest(out_path=None):
+    """
+    Comprobación sin ventana de que el programa (o el ejecutable) funciona:
+    análisis completo de una malla sintética, figura, informes ES/EN y
+    exportación Zemax/QUADOA.  Escribe el resultado en `out_path` (o en la
+    salida estándar) y devuelve 0 si todo va bien, 1 si algo falla.
+
+        gui_fem_mirror.py --selftest [fichero_resultado.txt]
+    """
+    import base64
+    import tempfile
+    lines, ok = [], True
+    try:
+        import numpy as np
+        import matplotlib
+        matplotlib.use('Agg')
+        import fem_mirror_analysis as m
+        import report_fem_mirror as rp
+        lines.append(f"fem_mirror_analysis {m.__version__} · Python {sys.version.split()[0]} · "
+                     f"numpy {np.__version__} · matplotlib {matplotlib.__version__}")
+        import tkinter as _tk
+        _tk.Tcl()                                       # Tcl/Tk empaquetados
+        import matplotlib.backends.backend_tkagg       # noqa: F401
+        import docx                                     # noqa: F401
+        tmp = tempfile.mkdtemp(prefix='fem_selftest_')
+        # Disco de 50 mm de radio (anillos) con desenfoque y astigmatismo
+        pts = [(0.0, 0.0)]
+        for r in np.linspace(2.5, 50.0, 20):
+            n = max(6, int(round(2 * np.pi * r / 2.5)))
+            t = np.arange(n) * 2 * np.pi / n
+            pts += list(zip(r * np.cos(t), r * np.sin(t)))
+        xy = np.array(pts)
+        rho2 = (xy ** 2).sum(1) / 50.0 ** 2
+        th = np.arctan2(xy[:, 1], xy[:, 0])
+        dz = 1e-5 * (2 * rho2 - 1) + 3e-6 * rho2 * np.cos(2 * th) + 2e-6
+        coor = np.column_stack([xy, np.zeros(len(xy))])
+        disp = np.column_stack([np.zeros(len(xy)), np.zeros(len(xy)), dz])
+        fname = os.path.join(tmp, 'selftest.txt')
+        m.save_fem_txt(fname, coor, disp, "Autocomprobación", units='mm')
+        params = {'version': m.__version__, 'fname': fname, 'case': None,
+                  'rigid': (1, 1, 1, 1, 1, 1), 'frame': 'global', 'quantity': 'sag',
+                  'aperture': 'Circular', 'nterms': 6, 'norm': 'pico', 'convention': 'fringe',
+                  'wls': True, 'radius': None, 'rin': None, 'hexorient': 'x', 'width': None,
+                  'height': None, 'cx': None, 'cy': None, 'units': 'mm', 'wavelength': 632.8,
+                  'incidence': 0.0, 'optics': True,
+                  'iso_spec': '3/50 nm (20 nm/-) RMSi < 10 nm ΔS2-dim(50 µrad/10/2)',
+                  'iso_form': 'rot', 'iso_axis': 0.0}
+        log, store, figs = [], [None], []
+        run_analysis(params, log.append, lambda ms, fn: fn(), embed_fig=figs.append,
+                     result_store=store)
+        text = "".join(log)
+        if '✗' in text or store[0] is None or not figs:
+            raise RuntimeError("el análisis no terminó correctamente:\n" + text[-3000:])
+        figs[0].savefig(os.path.join(tmp, 'figura.png'), dpi=60)
+        res = store[0]
+        lines.append(f"Análisis: {len(coor)} nodos · RMS residuo {res['rms_res']:.3e} mm")
+        logo = base64.b64decode(_LOGO_B64)
+        for lang in ('es', 'en'):
+            rp.generate_report(res['report'], os.path.join(tmp, f'informe_{lang}.docx'),
+                               lang=lang, units='mm', logo_png=logo)
+        lines.append("Informes Word ES/EN: correctos")
+        exp = res['export']
+        out = m.export_optical(exp['xy'], exp['un'], exp['w'], exp['geom'],
+                               os.path.join(tmp, 'export'), units='mm', lens_units='mm',
+                               n_grid=21, surface='sin_rigido', quantity='sag',
+                               source='selftest', frame='global')
+        lines.append(f"Exportación Zemax/QUADOA: {len(out['files'])} ficheros")
+        lines.append(f"Ficheros de prueba en: {tmp}")
+        lines.append("AUTOCOMPROBACIÓN CORRECTA")
+    except Exception:
+        ok = False
+        lines.append("AUTOCOMPROBACIÓN FALLIDA\n" + traceback.format_exc())
+    msg = "\n".join(lines) + "\n"
+    if out_path:
+        with open(out_path, 'w', encoding='utf-8') as fh:
+            fh.write(msg)
+    else:
+        sys.stdout.write(msg)
+    return 0 if ok else 1
+
+
+# ═══════════════════════════════════════════════════════════════════
 #  PUNTO DE ENTRADA
 # ═══════════════════════════════════════════════════════════════════
 
-if __name__ == '__main__':
-    app = App()
+def main():
+    if '--selftest' in sys.argv:
+        i = sys.argv.index('--selftest')
+        out = sys.argv[i + 1] if len(sys.argv) > i + 1 else None
+        sys.exit(selftest(out))
+    try:
+        app = App()
+    except Exception:
+        # Sin consola (ejecutable) el error no se vería: se muestra en una ventana
+        err = traceback.format_exc()
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror("Error al iniciar", err)
+            root.destroy()
+        except Exception:
+            sys.stderr.write(err)
+        sys.exit(1)
     app.mainloop()
+
+
+if __name__ == '__main__':
+    main()

@@ -17,7 +17,8 @@
 - **Error de superficie**: cambio de sag Δz (recomendado en espejos curvos, incluye el movimiento en el plano) o desplazamiento normal u·n
 - **Aporte RMS de cada término**, independiente del número de términos ajustados, y RMS/PV residual acumulado
 - Sistema de referencia **global** (Z = eje óptico) o **plano best-fit** (ver [Conceptos](#conceptos))
-- Áreas nodales sin triángulos falsos sobre huecos o entrantes del contorno
+- Áreas nodales sin triángulos falsos sobre huecos o entrantes del contorno, también con mallas mapeadas anisótropas (polares, tiras estrechas)
+- **Ejecutable para Windows** (un único `.exe`) para usar la GUI sin instalar Python
 - Ficheros con **varios casos de carga** apilados (1ª columna = nº de caso)
 - **Botón para ANSYS Mechanical** que exporta la cara seleccionada del espejo al formato de entrada, con las unidades en la cabecera
 - Cálculo de **RMS**, **RMS respecto a la media** y **PV** sobre la apertura
@@ -28,6 +29,16 @@
 - **Vista 3D interactiva** de la superficie de deformación con escala Z configurable
 - **Informe Word** (español o inglés) con los mapas de la superficie sin sólido rígido y del residuo, RMS, máximo, mínimo, PV, términos eliminados, calidad óptica, tabla ISO 10110-5 y observaciones automáticas
 - Coordenadas + valor interpolado al pasar el ratón por encima de los gráficos
+
+## Ejecutable para Windows (sin Python)
+
+Para usar la interfaz gráfica sin instalar Python, descarga `FEM_Mirror_Analysis_<versión>.exe` de la última versión en [Releases](https://github.com/elviohs/mirror-surface-deformation/releases/latest) y ábrelo con doble clic. No necesita instalación.
+
+- **Primer arranque lento**: el `.exe` se descomprime en una carpeta temporal cada vez que se abre, así que tarda unos segundos en mostrar la ventana.
+- **Aviso de Windows o del antivirus**: el ejecutable no está firmado digitalmente y Windows SmartScreen puede mostrar «Windows protegió su PC». Pulsa *Más información → Ejecutar de todas formas*. Algunos antivirus marcan como sospechosos los ejecutables de PyInstaller (falso positivo); si tu equipo está gestionado por el servicio de informática, puede que tengan que autorizarlo.
+- **Comprobación rápida** (sin ventana): `FEM_Mirror_Analysis_<versión>.exe --selftest resultado.txt` analiza una malla sintética, genera los informes y la exportación, y escribe el resultado en `resultado.txt`.
+
+El ejecutable incluye solo la GUI; el modo consola necesita Python. Para construirlo en local (en Windows): `python -m pip install -r requirements.txt pyinstaller pillow` y `python build_exe.py`. Al publicar una versión nueva en GitHub (*Releases → Draft a new release*, con una etiqueta `vX.Y.Z`), la acción `.github/workflows/build-exe.yml` construye el `.exe` en Windows, lo comprueba con `--selftest` y lo adjunta a la versión.
 
 ## Requisitos
 
@@ -195,7 +206,7 @@ donde `X`, `Y`, `Z` son las coordenadas del nodo y `dX`, `dY`, `dZ` los desplaza
 `ansys/exportar_espejo.py` es un script para ANSYS Mechanical (2022 R2 o posterior) que genera este fichero con solo seleccionar la cara del espejo:
 
 1. Resuelve el análisis estructural.
-2. Selecciona la(s) cara(s) del espejo en la vista gráfica, o una *Named Selection* de caras o nodos en el árbol.
+2. Selecciona la(s) cara(s) del espejo en la vista gráfica, o una *Named Selection* de caras o nodos en el árbol. Solo caras: si la selección incluye un cuerpo, una arista o un vértice, el script avisa y no exporta (un cuerpo añadiría los nodos interiores).
 3. Ejecuta el script: pestaña **Automation → Scripting**, abre el fichero y pulsa *Run*; o créalo una vez como botón en **Automation → User Buttons → Manage** (*Button Editor*) pegando su contenido.
 4. Elige dónde guardar el TXT y ábrelo en la GUI.
 
@@ -214,6 +225,8 @@ El script lee el fichero de resultados (`.rst`) con DPF: coordenadas sin deforma
 ├── instalar_dependencias.bat  # Instalador de dependencias (Windows)
 ├── requirements.txt           # Dependencias de Python
 ├── ansys/exportar_espejo.py   # Botón de ANSYS Mechanical: cara del espejo → TXT
+├── build_exe.py               # Construcción del ejecutable de Windows (PyInstaller)
+├── .github/workflows/         # Acción que publica el .exe en cada versión
 └── docs/                      # Figuras del README
 ```
 

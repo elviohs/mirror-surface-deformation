@@ -26,6 +26,11 @@ Claude outputs/
 resultados HARM/
 *-1.bat
 
+# Ejecutable (PyInstaller)
+build/
+dist/
+*.spec
+
 # Windows
 Thumbs.db
 desktop.ini

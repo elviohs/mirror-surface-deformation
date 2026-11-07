@@ -138,6 +138,8 @@ numpy, scipy, matplotlib
   pip install numpy scipy matplotlib
 """
 
+__version__ = "1.0.0"
+
 import argparse
 import math
 import os
@@ -612,6 +614,90 @@ def _local_spacing(xy, k=6):
     return loc
 
 
+def _spurious_triangles(xy, simplices, max_edge_factor=4.0, k=16, cone_deg=30.0):
+    """
+    Máscara (True = falso) de los triángulos que Delaunay crea sobre huecos
+    (pupila anular), muescas o entrantes del contorno, que no son malla.
+
+    Criterio direccional: una arista (a, b) de longitud L es falsa si, en
+    sus DOS extremos, hay otro nodo a menos de L / max_edge_factor en la
+    dirección de la propia arista (cono de ±cone_deg°).  En un hueco, detrás
+    de cada extremo hay material mallado con paso fino; en una malla
+    anisótropa (mapeada polar, tira estrecha, transición gradual) no hay
+    nodos más cercanos en esa dirección y la arista se conserva.  Sólo se
+    examinan los k vecinos más próximos: si no aparece ninguno en el cono,
+    la arista se conserva (criterio conservador).
+    """
+    from scipy.spatial import cKDTree
+    n = len(xy)
+    m = len(simplices)
+    if not max_edge_factor or m == 0 or n < 4:
+        return np.zeros(m, bool)
+    e = np.concatenate([simplices[:, [0, 1]], simplices[:, [1, 2]],
+                        simplices[:, [2, 0]]])
+    e.sort(axis=1)
+    ue, inv = np.unique(e, axis=0, return_inverse=True)
+    inv = np.asarray(inv).ravel().reshape(3, m).T
+    kk = min(k, n - 1)
+    dist, idx = cKDTree(xy).query(xy, k=kk + 1)
+    dist, idx = dist[:, 1:], idx[:, 1:]
+    d1 = np.where(dist > 0, dist, np.inf).min(axis=1)   # vecino no coincidente
+    a, b = ue[:, 0], ue[:, 1]
+    vec = xy[b] - xy[a]
+    L = np.hypot(vec[:, 0], vec[:, 1])
+    f = float(max_edge_factor)
+    bad = np.zeros(len(ue), bool)
+    cand = np.nonzero((L > 0) & (L > f * d1[a]) & (L > f * d1[b]))[0]
+    cosc = math.cos(math.radians(cone_deg))
+    for s0 in range(0, len(cand), 20000):
+        c = cand[s0:s0 + 20000]
+        u = vec[c] / L[c, None]
+
+        def closest_along(v):
+            w = xy[idx[v]] - xy[v][:, None, :]
+            dw = dist[v]
+            with np.errstate(invalid='ignore', divide='ignore'):
+                cosang = np.abs(np.einsum('mkj,mj->mk', w, u)) / dw
+            ok = (dw > 0) & (cosang >= cosc)
+            return np.where(ok, dw, np.inf).min(axis=1)
+
+        s_ab = np.maximum(closest_along(a[c]), closest_along(b[c]))
+        bad[c] = L[c] > f * s_ab
+    return bad[inv].any(axis=1)
+
+
+def _mesh_triangles(xy, max_edge_factor=4.0, area_threshold=0.0):
+    """
+    Triangulación de Delaunay de los nodos (XY) y máscara de triángulos
+    válidos: sin área (o por debajo de area_threshold), degenerados
+    (área < 1e-10·arista²) o falsos (_spurious_triangles) → no válidos.
+
+    Devuelve (simplices, valid, area2d) con area2d = doble del área en XY.
+    """
+    xy = np.asarray(xy, float)
+    if len(xy) < 3:
+        raise ValueError(f"Hacen falta al menos 3 nodos para triangular ({len(xy)}).")
+    try:
+        simplices = Delaunay(xy).simplices
+    except Exception:
+        # Puntos alineados o casi coincidentes: se reintenta con «joggle»
+        try:
+            simplices = Delaunay(xy, qhull_options='QJ').simplices
+        except Exception:
+            raise ValueError(f"No se puede triangular la superficie ({len(xy)} nodos): "
+                             f"los nodos están alineados o coinciden.") from None
+    P = xy[simplices]
+    v12 = P[:, 1] - P[:, 0]
+    v13 = P[:, 2] - P[:, 0]
+    area2d = np.abs(v12[:, 0] * v13[:, 1] - v13[:, 0] * v12[:, 1])
+    e2 = np.max(np.stack([(v12 ** 2).sum(1), (v13 ** 2).sum(1),
+                          ((P[:, 2] - P[:, 1]) ** 2).sum(1)], axis=1), axis=1)
+    valid = (area2d > max(area_threshold, 0.0)) & (area2d > 1e-10 * e2)
+    if max_edge_factor:
+        valid &= ~_spurious_triangles(xy, simplices, max_edge_factor)
+    return simplices, valid, area2d
+
+
 def compute_nodal_areas_and_normals(coor, area_threshold=0.0, max_edge_factor=4.0):
     """
     Triangulación de Delaunay en XY.  Áreas nodales (área proyectada del
@@ -623,11 +709,12 @@ def compute_nodal_areas_and_normals(coor, area_threshold=0.0, max_edge_factor=4.
         un triángulo.  ¡Ojo! es absoluta: MATLAB usaba 1 para un espejo de
         1,2 m en mm; en espejos pequeños un umbral de 1 descarta casi toda
         la malla.  Por defecto 0 (sólo se descartan triángulos de área nula).
-    max_edge_factor : se descartan los triángulos cuya arista más larga supera
-        este factor por la separación local entre nodos (distancia media a
-        los 6 vecinos más próximos, en el vértice más aislado).  Elimina los triángulos falsos
-        que Delaunay crea sobre huecos (pupila anular) o entrantes del
-        contorno, sin afectar a mallas graduales.  None/0 → desactivado.
+    max_edge_factor : se descartan los triángulos falsos que Delaunay crea
+        sobre huecos (pupila anular), muescas o entrantes del contorno: los
+        que tienen una arista más larga que este factor por la separación
+        entre nodos medida en la dirección de la propia arista, en sus dos
+        extremos (véase _spurious_triangles).  No afecta a mallas mapeadas
+        anisótropas ni a mallas graduales.  None/0 → desactivado.
 
     Devuelve
     --------
@@ -638,29 +725,14 @@ def compute_nodal_areas_and_normals(coor, area_threshold=0.0, max_edge_factor=4.
     normals   : ndarray (N, 3)   Normales unitarias (0 en esos nodos)
     """
     npts = len(coor)
-    tri = Delaunay(coor[:, :2])
-    simplices = tri.simplices
-
-    p0 = coor[simplices[:, 0], :2]
-    p1 = coor[simplices[:, 1], :2]
-    p2 = coor[simplices[:, 2], :2]
-    v12 = p1 - p0
-    v13 = p2 - p0
-    # Doble del área proyectada en XY
-    area2d = np.abs(v12[:, 0] * v13[:, 1] - v13[:, 0] * v12[:, 1])
-
-    valid = area2d > max(area_threshold, 0.0)
-    if max_edge_factor:
-        d_nn = _local_spacing(coor[:, :2])
-        P = coor[simplices, :2]
-        edges = np.stack([np.linalg.norm(P[:, 1] - P[:, 0], axis=1),
-                          np.linalg.norm(P[:, 2] - P[:, 1], axis=1),
-                          np.linalg.norm(P[:, 0] - P[:, 2], axis=1)], axis=1)
-        local = d_nn[simplices].max(axis=1)
-        local[~np.isfinite(local)] = np.inf
-        valid &= edges.max(axis=1) <= max_edge_factor * local
+    simplices, valid, area2d = _mesh_triangles(coor[:, :2], max_edge_factor,
+                                               area_threshold)
     simplices = simplices[valid]
     area2d = area2d[valid]
+    if len(simplices) == 0:
+        raise ValueError(
+            f"No se puede triangular la superficie ({npts} nodos): los nodos están "
+            f"alineados, son muy pocos o el umbral de área es demasiado grande.")
 
     # Normales de triángulo en 3D, orientadas con la normal global
     p0 = coor[simplices[:, 0]]
@@ -799,12 +871,14 @@ def _center(xy, center):
     return float(center[0]), float(center[1])
 
 
-def aperture_circular(xy, radius=None, center=None):
+def aperture_circular(xy, radius=None, center=None, tol=0.0):
     """
     Máscara circular.
 
     center : (xc, yc) o None (media de los nodos)
     radius : radio de normalización; None → distancia máxima al centro
+    tol    : tolerancia absoluta en el borde (coordenadas redondeadas en el
+             fichero: un nodo del borde puede quedar a 1e-5 fuera del radio)
 
     Devuelve mask (N,), r_norm (M,), theta (M,)
     """
@@ -813,11 +887,11 @@ def aperture_circular(xy, radius=None, center=None):
     r = np.hypot(xc, yc)
     if radius is None:
         radius = r.max()
-    mask = r <= radius * (1 + 1e-9)
-    return mask, r[mask] / radius, np.arctan2(yc[mask], xc[mask])
+    mask = r <= radius * (1 + 1e-9) + tol
+    return mask, np.minimum(r[mask] / radius, 1.0), np.arctan2(yc[mask], xc[mask])
 
 
-def aperture_annular(xy, radius=None, inner_radius=0.0, center=None):
+def aperture_annular(xy, radius=None, inner_radius=0.0, center=None, tol=0.0):
     """
     Máscara anular  r_in ≤ r ≤ R.  Coordenadas normalizadas a R.
     Devuelve mask, r_norm, theta.
@@ -827,11 +901,11 @@ def aperture_annular(xy, radius=None, inner_radius=0.0, center=None):
     r = np.hypot(xc, yc)
     if radius is None:
         radius = r.max()
-    mask = (r <= radius * (1 + 1e-9)) & (r >= inner_radius * (1 - 1e-9))
-    return mask, r[mask] / radius, np.arctan2(yc[mask], xc[mask])
+    mask = (r <= radius * (1 + 1e-9) + tol) & (r >= inner_radius * (1 - 1e-9) - tol)
+    return mask, np.minimum(r[mask] / radius, 1.0), np.arctan2(yc[mask], xc[mask])
 
 
-def aperture_rectangular(xy, width=None, height=None, center=None):
+def aperture_rectangular(xy, width=None, height=None, center=None, tol=0.0):
     """
     Máscara rectangular (lados paralelos a X e Y).  Para la base de
     Mahajan–Dai el rectángulo se inscribe en el círculo unidad: las
@@ -847,14 +921,14 @@ def aperture_rectangular(xy, width=None, height=None, center=None):
     if height is None:
         height = 2.0 * np.abs(yc).max()
     hw, hh = width / 2.0, height / 2.0
-    tol = 1 + 1e-9
-    mask = (np.abs(xc) <= hw * tol) & (np.abs(yc) <= hh * tol)
+    mask = ((np.abs(xc) <= hw * (1 + 1e-9) + tol)
+            & (np.abs(yc) <= hh * (1 + 1e-9) + tol))
     hd = math.hypot(hw, hh)
     return (mask, np.minimum(np.hypot(xc[mask], yc[mask]) / hd, 1.0),
             np.arctan2(yc[mask], xc[mask]), hw / hd, hh / hd)
 
 
-def aperture_elliptical(xy, width=None, height=None, center=None):
+def aperture_elliptical(xy, width=None, height=None, center=None, tol=0.0):
     """
     Máscara elíptica con ejes paralelos a X (ancho) e Y (alto), p. ej. un
     espejo plegado.  Según ISO/TR 14999-2:2019, 6.8.3, las coordenadas se
@@ -871,11 +945,11 @@ def aperture_elliptical(xy, width=None, height=None, center=None):
     a, b = width / 2.0, height / 2.0
     u, v = xc / a, yc / b
     rho = np.hypot(u, v)
-    mask = rho <= 1 + 1e-9
+    mask = rho <= 1 + 1e-9 + tol / min(a, b)
     return mask, np.minimum(rho[mask], 1.0), np.arctan2(v[mask], u[mask])
 
 
-def aperture_hexagonal(xy, circumradius=None, center=None, rotation=0.0):
+def aperture_hexagonal(xy, circumradius=None, center=None, rotation=0.0, tol=0.0):
     """
     Máscara hexagonal regular inscrita en el círculo de radio `circumradius`.
     rotation = 0 → vértices en ±X ; 30 → vértices en ±Y (lados verticales).
@@ -888,7 +962,7 @@ def aperture_hexagonal(xy, circumradius=None, center=None, rotation=0.0):
     # Girar al sistema "vértice en +X" para aplicar el test
     c, s = math.cos(math.radians(-rotation)), math.sin(math.radians(-rotation))
     xr, yr = c * xc - s * yc, s * xc + c * yc
-    apothem = circumradius * math.sqrt(3) / 2.0 * (1 + 1e-9)
+    apothem = circumradius * math.sqrt(3) / 2.0 * (1 + 1e-9) + tol
     c1 = np.abs(yr) <= apothem
     c2 = np.abs(xr * (math.sqrt(3) / 2) + yr * 0.5) <= apothem
     c3 = np.abs(xr * (math.sqrt(3) / 2) - yr * 0.5) <= apothem
@@ -919,15 +993,30 @@ def apply_aperture(xy, un, an, aperture, radius=None, width=None, height=None,
     geom   : dict  geometría de la apertura (contornos, área, informe)
     """
     valid = np.isfinite(un) & (an > 0)
+    nvalid = int(valid.sum())
+    if nvalid < 3:
+        raise ValueError("No hay nodos válidos (con área en la triangulación) "
+                         "para aplicar la apertura.")
     if center is None:
         center = surface_centroid(xy[valid], an[valid])
     cx, cy = center
     rv = np.hypot(xy[valid, 0] - cx, xy[valid, 1] - cy)
+    # Tolerancia de borde: 1 % de la separación entre nodos.  Las coordenadas
+    # del fichero vienen redondeadas (p. ej. 5 decimales) y los nodos del
+    # contorno pueden quedar ligeramente fuera de la cota nominal.
+    tol = 0.01 * float(np.median(_local_spacing(xy[valid])))
+    if not np.isfinite(tol):
+        tol = 0.0
+    for nm, val in (('radio', radius), ('ancho', width), ('alto', height)):
+        if val is not None and not (np.isfinite(val) and val > 0):
+            raise ValueError(f"El {nm} de la apertura debe ser un número positivo ({val}).")
+    if inner_radius is not None and not (np.isfinite(inner_radius) and inner_radius >= 0):
+        raise ValueError(f"El radio interior debe ser ≥ 0 ({inner_radius}).")
 
     if aperture == 'circular':
         if radius is None:
             radius = float(rv.max())
-        mask, r, th = aperture_circular(xy, radius, center)
+        mask, r, th = aperture_circular(xy, radius, center, tol)
         coords = {'r': r, 'theta': th}
         geom = {'type': 'circular', 'center': center, 'radius': radius}
     elif aperture == 'annular':
@@ -939,15 +1028,17 @@ def apply_aperture(xy, un, an, aperture, radius=None, width=None, height=None,
                 inner_radius = 0.0
         eps = inner_radius / radius
         if not 0.0 <= eps < 0.95:
-            raise ValueError(f"Obscuración ε = {eps:.3f} fuera de rango [0, 0.95).")
-        mask, r, th = aperture_annular(xy, radius, inner_radius, center)
+            raise ValueError(f"Obscuración ε = r_int/R = {eps:.3f} fuera de rango [0, 0.95): "
+                             f"el radio interior ({inner_radius:g}) debe ser menor que "
+                             f"el 95 % del exterior ({radius:g}).")
+        mask, r, th = aperture_annular(xy, radius, inner_radius, center, tol)
         coords = {'r': r, 'theta': th, 'shape': {'type': 'annular', 'eps': eps}}
         geom = {'type': 'annular', 'center': center, 'radius': radius,
                 'inner_radius': inner_radius, 'eps': eps}
     elif aperture == 'hexagonal':
         if radius is None:
             radius = float(rv.max())
-        mask, r, th = aperture_hexagonal(xy, radius, center, hex_rotation)
+        mask, r, th = aperture_hexagonal(xy, radius, center, hex_rotation, tol)
         coords = {'r': r, 'theta': th,
                   'shape': {'type': 'hexagonal', 'rotation': float(hex_rotation)}}
         geom = {'type': 'hexagonal', 'center': center, 'radius': radius,
@@ -957,16 +1048,24 @@ def apply_aperture(xy, un, an, aperture, radius=None, width=None, height=None,
             width = 2.0 * float(np.abs(xy[valid, 0] - cx).max())
         if height is None:
             height = 2.0 * float(np.abs(xy[valid, 1] - cy).max())
-        mask, r, th, a, b = aperture_rectangular(xy, width, height, center)
+        mask, r, th, a, b = aperture_rectangular(xy, width, height, center, tol)
         coords = {'r': r, 'theta': th, 'shape': {'type': 'rectangular', 'a': a, 'b': b}}
         geom = {'type': 'rectangular', 'center': center,
                 'width': width, 'height': height}
     elif aperture == 'elliptical':
+        auto = width is None and height is None
         if width is None:
             width = 2.0 * float(np.abs(xy[valid, 0] - cx).max())
         if height is None:
             height = 2.0 * float(np.abs(xy[valid, 1] - cy).max())
-        mask, r, th = aperture_elliptical(xy, width, height, center)
+        if auto:
+            # Elipse automática: los semiejes salen de los extremos en X e Y,
+            # pero eso no garantiza que contenga a todos los nodos (contorno
+            # poligonal): se amplía uniformemente hasta que los contiene.
+            rho = np.hypot((xy[valid, 0] - cx) / (width / 2), (xy[valid, 1] - cy) / (height / 2))
+            grow = max(1.0, float(rho.max()))
+            width, height = width * grow, height * grow
+        mask, r, th = aperture_elliptical(xy, width, height, center, tol)
         coords = {'r': r, 'theta': th}
         geom = {'type': 'elliptical', 'center': center,
                 'width': width, 'height': height}
@@ -977,6 +1076,9 @@ def apply_aperture(xy, un, an, aperture, radius=None, width=None, height=None,
     mask &= valid
     coords['r'] = coords['r'][keep]
     coords['theta'] = coords['theta'][keep]
+    if mask.sum() < 3:
+        raise ValueError(f"La apertura sólo contiene {int(mask.sum())} nodo(s) válido(s) "
+                         f"(de {nvalid}): revisa el centro y las dimensiones.")
     return mask, coords, geom
 
 
@@ -1020,20 +1122,16 @@ def describe_geometry(geom):
 
 def plot_triangulation(x, y, max_edge_factor=4.0):
     """
-    Triangulación para dibujar (matplotlib) sin los triángulos falsos que
-    puentean huecos o entrantes (mismo criterio que las áreas nodales).
+    Triangulación para dibujar e interpolar (matplotlib) con la misma malla
+    que las áreas nodales: sin triángulos falsos sobre huecos o entrantes ni
+    triángulos degenerados (que invalidan el buscador de matplotlib).
     """
     import matplotlib.tri as mtri
-    tri = mtri.Triangulation(x, y)
-    if max_edge_factor:
-        P = np.column_stack([x, y])
-        d_nn = _local_spacing(P)
-        T = tri.triangles
-        Q = P[T]
-        emax = np.max(np.stack([np.linalg.norm(Q[:, 1] - Q[:, 0], axis=1),
-                                np.linalg.norm(Q[:, 2] - Q[:, 1], axis=1),
-                                np.linalg.norm(Q[:, 0] - Q[:, 2], axis=1)], axis=1), axis=1)
-        tri.set_mask(emax > max_edge_factor * d_nn[T].max(axis=1))
+    x = np.asarray(x, float)
+    y = np.asarray(y, float)
+    simplices, valid, _ = _mesh_triangles(np.column_stack([x, y]), max_edge_factor)
+    tri = mtri.Triangulation(x, y, triangles=simplices)
+    tri.set_mask(~valid)
     return tri
 
 
@@ -1099,6 +1197,10 @@ def fit_surface(u, coords, basis, terms, norm='pico', weights=None):
 
     Devuelve coeffs, residual, A
     """
+    if len(u) < len(terms):
+        raise ValueError(f"La apertura sólo contiene {len(u)} nodos y se piden "
+                         f"{len(terms)} términos: reduce el número de términos o "
+                         f"revisa la apertura.")
     A = build_design_matrix(basis, terms, coords, norm)
     coeffs, residual = fit_weighted_ls(u, A, weights)
     return coeffs, residual, A
@@ -1297,7 +1399,7 @@ def optical_quality(surf_rms, wavelength_nm, units='mm', incidence_deg=0.0):
 
 def run_pipeline(coor, disp, rigid=(1, 1, 1, 1, 1, 1), quantity='sag',
                  aperture='circular', aperture_kw=None, basis='fringe', terms=None,
-                 norm='pico', wls=True):
+                 norm='pico', wls=True, area_threshold=0.0):
     """
     Cadena completa sobre un campo de desplazamientos.  Todas las etapas son
     lineales en `disp`, de modo que el resultado de una combinación de casos
@@ -1305,7 +1407,7 @@ def run_pipeline(coor, disp, rigid=(1, 1, 1, 1, 1, 1), quantity='sag',
 
     Devuelve dict con un, an, mask, coords, geom, residual, coeffs.
     """
-    un, an, pos = extract_rigid(coor, disp, rigid, quantity=quantity)
+    un, an, pos = extract_rigid(coor, disp, rigid, area_threshold, quantity=quantity)
     mask, coords, geom = apply_aperture(coor[:, :2], un, an, aperture, **(aperture_kw or {}))
     out = {'un': un, 'an': an, 'pos': pos, 'mask': mask, 'coords': coords, 'geom': geom,
            'residual': None, 'coeffs': None}
@@ -1347,12 +1449,31 @@ def load_case_aligned(fname, case=None, ref_coor=None, tol_rel=1e-6):
             "Los casos deben calcularse con la misma malla.")
     from scipy.spatial import cKDTree
     span = float(np.ptp(ref_coor, axis=0).max()) or 1.0
-    d, idx = cKDTree(coor).query(ref_coor)
-    if d.max() > tol_rel * span or len(np.unique(idx)) != len(idx):
-        raise ValueError(
-            f"{fname}: las coordenadas de los nodos no coinciden con las del primer "
-            f"caso (desviación máx. {d.max():.3g}).  Los casos deben calcularse con "
-            "la misma malla.")
+    tol = tol_rel * span
+    if float(np.max(np.abs(coor - ref_coor))) <= tol:
+        return ref_coor, disp                       # mismo orden de nodos
+    tree = cKDTree(coor)
+    d, idx = tree.query(ref_coor)
+    mismatch = ValueError(
+        f"{fname}: las coordenadas de los nodos no coinciden con las del primer "
+        f"caso (desviación máx. {d.max():.3g}).  Los casos deben calcularse con "
+        "la misma malla.")
+    if d.max() > tol:
+        raise mismatch
+    uniq, counts = np.unique(idx, return_counts=True)
+    if len(uniq) != len(idx):
+        # Nodos con coordenadas repetidas (p. ej. costuras sin fusionar): se
+        # emparejan en el orden en que aparecen en cada fichero.
+        idx = idx.copy()
+        conflict = np.isin(idx, uniq[counts > 1])
+        used = np.zeros(len(coor), bool)
+        used[idx[~conflict]] = True
+        for i in np.nonzero(conflict)[0]:
+            free = [j for j in sorted(tree.query_ball_point(ref_coor[i], tol)) if not used[j]]
+            if not free:
+                raise mismatch
+            idx[i] = free[0]
+            used[free[0]] = True
     return ref_coor, disp[idx]
 
 
@@ -1734,7 +1855,9 @@ def iso10110_analysis(u, weights, coords, units='mm', xy=None, n_radial=12,
         f = WI[T] / k
         d1, d2 = p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]
         det = d1[:, 0] * d2[:, 1] - d1[:, 1] * d2[:, 0]
-        ok = np.abs(det) > 0
+        e2 = np.maximum.reduce([(d1 ** 2).sum(1), (d2 ** 2).sum(1),
+                                ((p[:, 2] - p[:, 1]) ** 2).sum(1)])
+        ok = np.abs(det) > 1e-3 * e2         # sin astillas casi degeneradas
         g1, g2 = f[:, 1] - f[:, 0], f[:, 2] - f[:, 0]
         gx = (g1 * d2[:, 1] - g2 * d1[:, 1])[ok] / det[ok]
         gy = (g2 * d1[:, 0] - g1 * d2[:, 0])[ok] / det[ok]
@@ -1750,8 +1873,12 @@ def iso10110_analysis(u, weights, coords, units='mm', xy=None, n_radial=12,
     if slope_specs:
         g = geom or {'type': 'circular', 'center': center, 'radius': semi}
         for sp in slope_specs:
-            res = slope_deviation(xy, WI / k, g, units, sp,
-                                  axis_angle_deg=out['axis_angle'])
+            try:
+                res = slope_deviation(xy, WI / k, g, units, sp,
+                                      axis_angle_deg=out['axis_angle'])
+            except Exception as e:
+                res = {'max_mrad': None, 'rms_mrad': None, 'n': 0,
+                       'notes': [f"pendiente no evaluada: {e}"]}
             out['slopes'].append({**sp, **res})
     out['fields'] = fields
     return out
@@ -1814,6 +1941,13 @@ def slope_deviation(xy, f, geom, units, spec, axis_angle_deg=0.0, max_points=4_0
     off = (np.arange(nwin) - (nwin - 1) / 2.0) * h
     v, wdir = spec.get('v'), spec.get('w')
     directional = wdir in ('x', 'y', 'ρ', 'φ') and v != '2-dim'
+    along_x = directional and wdir == 'x' and not axis_angle_deg
+    along_y = directional and wdir == 'y' and not axis_angle_deg
+    need = (1 if along_x else nwin, 1 if along_y else nwin)        # (filas, columnas)
+    if F.shape[0] < need[0] or F.shape[1] < need[1]:
+        return {'max_mrad': None, 'rms_mrad': None, 'n': 0, 'h_used_mm': h / to_file,
+                'notes': notes + [f"la longitud de muestreo G = {spec['G_mm']:g} mm es mayor "
+                                  f"que el área de ensayo"]}
     if directional and wdir in ('x', 'y') and not axis_angle_deg:
         # 1-dim (6.1): recta LSQ en tramos de longitud G a lo largo de X o Y
         kern = off / np.sum(off ** 2)
@@ -1864,7 +1998,7 @@ def _iso_num(txt):
 def _parse_slopes(s, warn):
     """Extrae ΔSv,w(F/G/H) y RMSΔSv,w(K/L/M) de la indicación (ISO 10110-5, 5.2.4.1)."""
     import re
-    num = r'(\d+(?:[.,]\d+)?)'
+    num = r'(\d+(?:[.,]\d+)?|[.,]\d+)'
     rx = re.compile(r"(RMS)?\s*ΔS\s*(1-dim|2-dim)?\s*,?\s*([XYxyρφ])?\s*\(\s*" + num +
                     r"\s*(mrad|µrad|urad|rad|°|deg|arcmin|arcsec|''|\"|'|’’|’|′′|″|′)?\s*/\s*"
                     + num + r"\s*(?:mm)?\s*/\s*" + num + r"\s*(?:mm)?\s*\)")
@@ -1903,19 +2037,24 @@ def parse_iso10110(spec):
     import re
     s = str(spec).strip()
     for a, b in (('μ', 'µ'), ('—', '-'), ('–', '-'), ('−', '-'), ('＜', '<'),
-                 ('lambda', 'λ'), ('Lambda', 'λ')):
+                 ('≤', '<'), ('<=', '<'), ('=<', '<'), ('lambda', 'λ'), ('Lambda', 'λ'),
+                 ('∆', 'Δ')):
         s = s.replace(a, b)
-    s = re.sub(r'\b(1|2)\s*-\s*dim\b', r'\1-dim', s)
+    s = re.sub(r'(?<![\d.,])(1|2)\s*-\s*dim\b', r'\1-dim', s, flags=re.I)
+    s = re.sub(r'(1|2)-DIM', r'\1-dim', s, flags=re.I)
     if not s.startswith('3/'):
         raise ValueError("La indicación debe empezar por «3/».")
     warn = []
-    num = r'(\d+(?:[.,]\d+)?)'
+    num = r'(\d+(?:[.,]\d+)?|[.,]\d+)'
     unit = r'\s*(nm|µm|um)?'
 
     lam = None
-    m = re.search(r'λ\s*=\s*' + num + r'\s*(nm)?', s)
+    m = re.search(r'λ\s*=\s*' + num + r'\s*(nm|µm|um)?', s)
     if m:
-        lam = _iso_num(m.group(1))
+        lam = round(_iso_num(m.group(1)) * (1e3 if m.group(2) in ('µm', 'um') else 1.0), 6)
+        if not 100.0 <= lam <= 20000.0:
+            warn.append(f"λ = {lam:g} nm parece fuera de rango: revisa las unidades "
+                        f"(sin unidad se toma nm).")
         s = s[:m.start()] + s[m.end():]
     if re.search(r'\(\s*all\b', s):
         warn.append("Campo de prueba «(all …)» ignorado: se evalúa la apertura completa.")
@@ -1940,13 +2079,13 @@ def parse_iso10110(spec):
     body = s[2:]
     for key, rx in (('PVr', r'PVr\s*\(\s*' + num + unit + r'\s*\)'),
                     ('PV', r'PV\s*\(\s*' + num + unit + r'\s*\)')):
-        m = re.search(rx, body)
+        m = re.search(rx, body, flags=re.I)
         if m:
             tol[key] = to_nm(m.group(1), m.group(2))
             body = body[:m.start()] + body[m.end():]
-    for m in re.finditer(r'RMS\s*([tiaTIA])\s*<\s*' + num + unit, body):
+    for m in re.finditer(r'RMS\s*([tia])\s*<\s*' + num + unit, body, flags=re.I):
         tol['RMS' + m.group(1).lower()] = to_nm(m.group(2), m.group(3))
-    body = re.sub(r'RMS\s*[tiaTIA]\s*<\s*' + num + unit, '', body)
+    body = re.sub(r'RMS\s*[tia]\s*<\s*' + num + unit, '', body, flags=re.I)
 
     def val(txt, what):
         txt = (txt or '').strip()
@@ -2100,11 +2239,33 @@ def read_header_meta(fname, max_lines=100):
     return meta
 
 
+def normalize_units(u):
+    """Normaliza una unidad de longitud escrita a mano ('um', 'μm' griega,
+    'micron', 'MM'…).  Devuelve la clave de UNIT_TO_NM o None."""
+    t = str(u or '').strip().replace('\u03bc', '\u00b5')      # μ griega → µ
+    t = {'um': 'µm', 'micron': 'µm', 'microns': 'µm', 'µ': 'µm',
+         'micra': 'µm', 'micras': 'µm'}.get(t.lower(), t)
+    t = t if t in UNIT_TO_NM else t.lower()
+    return t if t in UNIT_TO_NM else None
+
+
 def header_units(fname):
-    """Unidades declaradas en la cabecera del fichero, o None."""
-    u = read_header_meta(fname).get('unidades', '').strip()
-    u = {'um': 'µm', 'micron': 'µm'}.get(u.lower(), u)
-    return u if u in UNIT_TO_NM else None
+    """
+    Unidades declaradas en la cabecera del fichero («# unidades: mm»), o
+    None si no se declaran.  Si se declaran pero no se reconocen (p. ej.
+    «desconocida», que escribe el botón de ANSYS cuando no pudo leerlas)
+    se lanza ValueError: no se debe suponer mm en silencio.
+    """
+    meta = read_header_meta(fname)
+    raw = meta.get('unidades', meta.get('units', '')).strip()
+    if not raw:
+        return None
+    u = normalize_units(raw)
+    if u is None:
+        raise ValueError(f"La cabecera del fichero declara unas unidades que no se "
+                         f"reconocen («{raw}»).  Indica las unidades a mano "
+                         f"(m, mm, µm o nm).")
+    return u
 
 
 def _case_ids(data):
@@ -2117,8 +2278,19 @@ def _case_ids(data):
     if data.shape[1] < 7:
         return None
     ids = data[:, 0]
-    uniq = np.unique(ids)
+    uniq, counts = np.unique(ids, return_counts=True)
     if len(uniq) == len(ids) or len(uniq) == 1:
+        return None
+    if counts.min() != counts.max():
+        # Recuentos distintos: no son bloques de casos (todos los casos tienen
+        # los mismos nodos), sino números de nodo con alguna repetición.  Si
+        # casi todo son repeticiones, el fichero es ambiguo: mejor avisar.
+        if len(uniq) <= 0.5 * len(ids):
+            raise ValueError(
+                f"La primera columna repite valores con frecuencias distintas "
+                f"({len(uniq)} valores en {len(ids)} filas): no parecen ni números "
+                f"de nodo ni bloques de casos de carga del mismo tamaño.  Revisa "
+                f"el fichero.")
         return None
     return [int(v) if float(v).is_integer() else float(v) for v in uniq]
 
@@ -2142,20 +2314,33 @@ def load_fem_data(fname, case=None):
     """
     data = _read_table(fname)
     cases = _case_ids(data)
+    rows = np.arange(len(data))
     if cases is not None:
         if case is None:
+            lst = ", ".join(f"{c:g}" for c in cases[:10]) + (" …" if len(cases) > 10 else "")
             raise ValueError(
                 f"El fichero contiene {len(cases)} casos de carga apilados "
-                f"(primera columna = {cases}).  Indica cuál analizar "
+                f"(primera columna = {lst}).  Indica cuál analizar "
                 f"(--case en línea de comandos o 'Caso de carga' en la GUI).")
         sel = data[:, 0] == float(case)
         if not sel.any():
             raise ValueError(f"El caso {case} no existe en el fichero. Casos: {cases}")
-        data = data[sel]
-        return np.arange(len(data), dtype=float), data[:, 1:4], data[:, 4:7]
-    if data.shape[1] >= 7:
-        return data[:, 0], data[:, 1:4], data[:, 4:7]
-    return np.arange(len(data), dtype=float), data[:, 0:3], data[:, 3:6]
+        data, rows = data[sel], rows[sel]
+        node, coor, disp = np.arange(len(data), dtype=float), data[:, 1:4], data[:, 4:7]
+    elif data.shape[1] >= 7:
+        node, coor, disp = data[:, 0], data[:, 1:4], data[:, 4:7]
+    else:
+        node, coor, disp = np.arange(len(data), dtype=float), data[:, 0:3], data[:, 3:6]
+    bad = ~(np.isfinite(coor).all(axis=1) & np.isfinite(disp).all(axis=1))
+    if bad.any():
+        first = ", ".join(str(int(r) + 1) for r in rows[bad][:5])
+        raise ValueError(
+            f"El fichero tiene {int(bad.sum())} fila(s) de datos con valores no "
+            f"numéricos (NaN o infinito); primeras filas de datos afectadas: {first}.  "
+            f"Revisa la exportación del FEM.")
+    if len(coor) < 3:
+        raise ValueError(f"El fichero sólo tiene {len(coor)} nodos: hacen falta al menos 3.")
+    return node, coor, disp
 
 
 def check_duplicates(coor, tol_rel=1e-9):
@@ -2237,14 +2422,16 @@ def plot_results(coor, un, mask, residual, aperture_name, output_file='fem_analy
     axes[0].set_xlabel('X')
     axes[0].set_ylabel('Y')
 
+    fitted = residual is not None and np.size(residual) == int(np.sum(mask))
     un_res_full = np.full(len(coor), np.nan)
-    un_res_full[mask] = residual
+    un_res_full[mask] = residual if fitted else un[mask]
     valid = np.isfinite(un_res_full)
     if valid.sum() > 3:
         triang_ap = plot_triangulation(x[valid], y[valid])
         cf2 = axes[1].tricontourf(triang_ap, un_res_full[valid], levels=64, cmap=surface_cmap())
-        plt.colorbar(cf2, ax=axes[1], label='Residuo')
-    axes[1].set_title(f'Residuo tras el ajuste\n(apertura {aperture_name})')
+        plt.colorbar(cf2, ax=axes[1], label='Residuo' if fitted else 'Error de superficie')
+    axes[1].set_title(f'Residuo tras el ajuste\n(apertura {aperture_name})' if fitted
+                      else f'Apertura {aperture_name}\n(sin ajuste polinómico)')
     axes[1].set_aspect('equal')
     axes[1].set_xlabel('X')
     axes[1].set_ylabel('Y')
@@ -2252,7 +2439,9 @@ def plot_results(coor, un, mask, residual, aperture_name, output_file='fem_analy
     plt.tight_layout()
     plt.savefig(output_file, dpi=150, bbox_inches='tight')
     print(f"\n  Gráfico guardado en: {output_file}")
-    plt.show()
+    if plt.get_backend().lower() != 'agg':
+        plt.show()
+    plt.close(fig)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2312,7 +2501,8 @@ def _cli_sweep(args, coor, gbasis, rigid, basis, terms, ap_kw):
                            rigid=rigid, quantity=args.quantity, aperture=args.aperture,
                            aperture_kw=ap_kw, basis=basis,
                            terms=None if args.no_zernike else terms,
-                           norm=args.norm, wls=not args.no_wls)
+                           norm=args.norm, wls=not args.no_wls,
+                           area_threshold=args.area_threshold)
     print(f"\n  ── Barrido de ángulo (sin sólido rígido{'' if args.no_zernike else ' / residuo del ajuste'}) ──")
     print(f"  {'Ángulo':>8} {'RMS':>12} {'PV':>12}" +
           ("" if args.no_zernike else f" {'RMS res.':>12} {'PV res.':>12}"))
@@ -2399,11 +2589,13 @@ def optics_summary(un_ap, w, coords, geom, xy_ap, units='mm', wavelength_nm=632.
     smin = min(oq_s['strehl'], oq_r['strehl'] if oq_r else 1.0)
     if smin < 0.3:
         L.append("⚠ Strehl < 0.3: la aproximación de Maréchal no es fiable; usar el valor FFT.")
-    fr = wavelength_nm / 2.0
+    lam_iso = tol['wavelength'] if tol and tol.get('wavelength') else wavelength_nm
+    fr = lam_iso / 2.0
     L.append("")
     cyl = iso['form'] == 'cyl'
     L.append(f"── ISO 10110-5 / ISO 14999-4:2015 ({'cilíndrica/tórica' if cyl else 'revolución'}; "
-             f"superficie, nm; 1 fringe = λ/2 = {fr:g} nm) ──")
+             f"superficie, nm; 1 fringe = λ/2 = {fr:g} nm"
+             f"{' con la λ de la indicación' if lam_iso != wavelength_nm else ''}) ──")
     L.append("Desviación normal a la superficie u·n̂ (ISO 14999-4:2015, 3.2.1)." if iso_u is not None
              else "⚠ ISO calculado con la magnitud del análisis; la norma usa la desviación "
                   "normal a la superficie (ISO 14999-4:2015, 3.2.1).")
@@ -2453,14 +2645,19 @@ def optics_summary(un_ap, w, coords, geom, xy_ap, units='mm', wavelength_nm=632.
         if sp.get('n'):
             L.append(f"{sp['text']}: máx {sp['max_mrad']*1e3:.3f} µrad, RMS {sp['rms_mrad']*1e3:.3f} µrad "
                      f"({sp['n']} posiciones; G = {sp['G_mm']:g} mm, H = {sp['H_mm']:g} mm; ISO 14999-4, 6)")
+        elif not sp.get('notes'):
+            L.append(f"{sp['text']}: no evaluada")
         for nt in sp.get('notes', []):
-            L.append(f"  ⚠ {nt}")
+            L.append(f"  ⚠ {sp['text']}: {nt}" if not sp.get('n') else f"  ⚠ {nt}")
     L.append(f"Notación: {format_iso10110(iso)}")
     if tol is not None:
         L.append(f"Comprobación frente a: {iso_spec}")
         for wmsg in tol['warnings']:
             L.append(f"⚠ {wmsg}")
         for key, meas, lim, ok, un in check:
+            if meas is None and un == 'mrad':
+                L.append(f"  {key}: no evaluada (véase el aviso de la pendiente)")
+                continue
             if meas is None:
                 L.append(f"  {key:<5} no evaluado con la descomposición "
                          f"{'cilíndrica' if cyl else 'de revolución'}")
@@ -2474,7 +2671,8 @@ def optics_summary(un_ap, w, coords, geom, xy_ap, units='mm', wavelength_nm=632.
     return {'iso': {k_: v for k_, v in iso.items() if k_ != 'fields'}, 'iso_fields': iso['fields'],
             'wfe_surface': oq_s, 'wfe_residual': oq_r, 'psf': psf,
             'tol': tol, 'check': check, 'lines': L, 'units': units,
-            'wavelength': wavelength_nm, 'incidence': incidence_deg, 'spec': iso_spec}
+            'wavelength': wavelength_nm, 'fringe_nm': fr, 'incidence': incidence_deg,
+            'spec': iso_spec}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2540,8 +2738,9 @@ def export_half_extent(geom):
         return geom['width'] / 2.0, geom['height'] / 2.0
     R = float(geom['radius'])
     if t == 'hexagonal':
-        a = R * math.sqrt(3) / 2.0
-        return (R, a) if abs(geom.get('rotation', 0.0)) < 15 else (a, R)
+        rot = math.radians(float(geom.get('rotation', 0.0)))
+        ang = rot + np.arange(6) * math.pi / 3.0            # vértices
+        return float(np.abs(R * np.cos(ang)).max()), float(np.abs(R * np.sin(ang)).max())
     return R, R
 
 
@@ -2908,6 +3107,7 @@ def main():
     parser.add_argument(
         "fname", nargs="?",
         help="Fichero TXT con resultados FEM (node X Y Z dX dY dZ  ó  X Y Z dX dY dZ)")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument(
         "--case", type=float, default=None,
         help="Caso de carga a analizar si el fichero contiene varios casos "
@@ -3042,6 +3242,13 @@ def main():
                    help="Guardar los desplazamientos combinados en un TXT")
 
     args = parser.parse_args()
+    if args.units:
+        args.units = normalize_units(args.units)
+    if args.sweep is not None and not args.gravity:
+        parser.error("--sweep necesita --gravity (barrido de elevación de la combinación de gravedad).")
+    if (args.elevation is not None or args.ref_elevation is not None or args.constant) \
+            and not args.gravity:
+        parser.error("--elevation, --ref-elevation y --constant sólo se usan con --gravity.")
 
     basis = basis_key(args.aperture, args.convention)
     if basis in ORTHO_BASES:
@@ -3063,7 +3270,7 @@ def main():
     if args.nterms is not None:
         if args.nterms <= 0:
             args.no_zernike = True
-            args.terms = [0]
+            args.terms = default_terms(basis, 1)
         else:
             args.terms = default_terms(basis, args.nterms)
     if args.terms is None:
@@ -3080,7 +3287,10 @@ def main():
     if args.units is None:
         src = args.fname if not combining else _split_case(
             (args.gravity or args.combine)[0][0])[0]
-        hu = header_units(src) if src else None
+        try:
+            hu = header_units(src) if src else None
+        except ValueError as e:
+            _fail(f"{e}  (opción --units)")
         args.units = hu or 'mm'
         units_msg = (f"  Unidades: {args.units}"
                      + (" (cabecera del fichero)" if hu
@@ -3096,7 +3306,7 @@ def main():
         try:
             coor, disp, gbasis, desc = _cli_combination(args)
         except ValueError as e:
-            parser.error(str(e))
+            _fail(e)
         print("\n".join("  " + d for d in desc))
         if args.save_combined and disp is not None:
             save_fem_txt(args.save_combined, coor, disp, "\n".join(desc), units=args.units)
@@ -3106,7 +3316,7 @@ def main():
         try:
             _, coor, disp = load_fem_data(args.fname, args.case)
         except ValueError as e:
-            parser.error(str(e))
+            _fail(e)
     if args.case is not None and not combining:
         print(f"  Caso de carga: {args.case:g}")
     print(units_msg)
@@ -3173,7 +3383,7 @@ def main():
         try:
             mask, coords, geom = apply_aperture(coor[:, :2], un, an, args.aperture, **ap_kw)
         except ValueError as e:
-            parser.error(str(e))
+            _fail(e)
     if not args.no_zernike:
         fam = BASIS_FAMILY_ES[basis]
         print(f"\n  ── Ajuste {fam} — apertura {args.aperture} ──")
@@ -3186,7 +3396,8 @@ def main():
             print(f"  ⚠  La malla cubre sólo ~{cov*100:.0f}% de la apertura: parece un "
                   f"modelo parcial (simetría).  Revisa el centro (--center) y el radio.")
         if mask.sum() < len(terms):
-            print("  ⚠  Menos puntos que términos: ajuste inestable.")
+            _fail(f"La apertura sólo contiene {int(mask.sum())} nodos y se piden "
+                  f"{len(terms)} términos: reduce --nterms/--terms o revisa la apertura.")
 
         un_ap = un[mask]
         an_ap = an[mask] / an[mask].sum()
@@ -3196,7 +3407,7 @@ def main():
         print(f"  Método: {'LS ordinario (--no-wls)' if args.no_wls else 'WLS ponderado por área'}"
               f" · normalización '{args.norm}'\n")
         contrib = term_contributions(un_ap, build_design_matrix(basis, terms, coords, args.norm),
-                                     an_ap)
+                                     np.ones_like(an_ap) if args.no_wls else an_ap)
         print("\n".join(format_fit_table(basis, terms, coeffs, contrib)))
 
         rb, ra = rms_area_weighted(un_ap, an_ap), rms_area_weighted(residual, an_ap)
@@ -3243,5 +3454,22 @@ def main():
             plt.show()
 
 
-if __name__ == '__main__':
-    main()
+def _fail(msg):
+    """Error de datos en la línea de comandos: mensaje claro, sin el bloque
+    de uso de argparse (reservado a errores de opciones)."""
+    print(f"\n✗ Error: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def _cli_entry():
+    """Punto de entrada de la línea de comandos: errores de datos o de
+    opciones como mensaje claro, sin traza de Python."""
+    try:
+        main()
+    except (ValueError, np.linalg.LinAlgError, OSError) as e:
+        print(f"\n✗ Error: {e}", file=sys.stderr)
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    _cli_entry()

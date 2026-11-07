@@ -118,6 +118,7 @@ TXT = {
         'ap_hex': ("Hexagonal · centro ({cx:.3f}, {cy:.3f}) · circunradio {r:.4g} {u}"
                    " · vértices en {o}"),
         'ap_rect': "Rectangular · centro ({cx:.3f}, {cy:.3f}) · {w:.4g} × {h:.4g} {u}",
+        'ap_ell': "Elíptica · centro ({cx:.3f}, {cy:.3f}) · ejes {w:.4g} × {h:.4g} {u}",
         'quantity': "Error de superficie",
         'q_sag': "Cambio de sag Δz = (u·n̂)/n_z (incluye el movimiento en el plano)",
         'q_normal': "Desplazamiento normal u·n̂",
@@ -146,7 +147,7 @@ TXT = {
         'max': "Máximo (pico)", 'min': "Mínimo (valle)",
         'pv': "PV (máximo − mínimo)",
         'at': "en ({x:.3g}, {y:.3g})",
-        'red': "Reducción de RMS respecto a la sección 2",
+        'red': "Reducción de RMS en la apertura (antes del ajuste: {a})",
         'term': "Término", 'sc': "Nº", 'desc': "Descripción",
         'coef': "Coeficiente [{u}]",
         'cbar': "Error de superficie [{u}]", 'cbar_res': "Residuo [{u}]",
@@ -178,7 +179,12 @@ TXT = {
                 'hexagonal': "polinomios hexagonales (Mahajan–Dai)",
                 'rectangular': "polinomios rectangulares (Mahajan–Dai)"},
         'ap_name': {'circular': 'circular', 'annular': 'anular',
-                    'hexagonal': 'hexagonal', 'rectangular': 'rectangular'},
+                    'hexagonal': 'hexagonal', 'rectangular': 'rectangular',
+                    'elliptical': 'elíptica'},
+        'n_tiny': ("Los {n} términos ajustados apenas reducen el RMS en la apertura "
+                   "({p:.1f} %): el pistón y los tilts ya los elimina el sólido rígido. Para "
+                   "separar la forma (desenfoque, astigmatismo…) ajusta más términos."),
+        'version': "versión",
     },
     'en': {
         'title': "FEM mirror surface analysis report",
@@ -187,7 +193,7 @@ TXT = {
         'page': "Page",
         's_setup': "1. Analysis data",
         's_rbm': "2. Surface after rigid body motion removal",
-        's_fit': "3. Residual after removing {n} {fam} terms",
+        's_fit': "3. Residual after removing {n} terms ({fam})",
         's_notes': "{k}. Remarks",
         's_opt': "{k}. Optical quality",
         's_iso': "{k}. ISO 10110-5 surface form tolerances",
@@ -271,6 +277,7 @@ TXT = {
         'ap_hex': ("Hexagonal · centre ({cx:.3f}, {cy:.3f}) · circumradius {r:.4g} {u}"
                    " · vertices on {o}"),
         'ap_rect': "Rectangular · centre ({cx:.3f}, {cy:.3f}) · {w:.4g} × {h:.4g} {u}",
+        'ap_ell': "Elliptical · centre ({cx:.3f}, {cy:.3f}) · axes {w:.4g} × {h:.4g} {u}",
         'quantity': "Surface error",
         'q_sag': "Sag change Δz = (u·n̂)/n_z (includes in-plane motion)",
         'q_normal': "Normal displacement u·n̂",
@@ -292,14 +299,14 @@ TXT = {
                      "and subtracted ({method}). The residual is the figure error that "
                      "those terms cannot correct."),
         'fig_rbm': "Figure {k}. Surface error after rigid body motion removal.",
-        'fig_res': "Figure {k}. Residual after removing {n} {fam} terms.",
+        'fig_res': "Figure {k}. Residual after removing {n} terms ({fam}).",
         'tab_stats': "Results",
         'q': "Quantity", 'v': "Value",
         'rms': "RMS (area-weighted)",
         'max': "Maximum (peak)", 'min': "Minimum (valley)",
         'pv': "PV (maximum − minimum)",
         'at': "at ({x:.3g}, {y:.3g})",
-        'red': "RMS reduction with respect to section 2",
+        'red': "RMS reduction within the aperture (before the fit: {a})",
         'term': "Term", 'sc': "No.", 'desc': "Description",
         'coef': "Coefficient [{u}]",
         'cbar': "Surface error [{u}]", 'cbar_res': "Residual [{u}]",
@@ -329,9 +336,40 @@ TXT = {
                 'hexagonal': "hexagonal polynomials (Mahajan–Dai)",
                 'rectangular': "rectangular polynomials (Mahajan–Dai)"},
         'ap_name': {'circular': 'circular', 'annular': 'annular',
-                    'hexagonal': 'hexagonal', 'rectangular': 'rectangular'},
+                    'hexagonal': 'hexagonal', 'rectangular': 'rectangular',
+                    'elliptical': 'elliptical'},
+        'n_tiny': ("The {n} fitted terms barely reduce the RMS within the aperture "
+                   "({p:.1f} %): piston and tilts are already removed with the rigid body "
+                   "motion. Fit more terms to separate the form (defocus, astigmatism…)."),
+        'version': "version",
     },
 }
+
+# Avisos del módulo de análisis (en español) → inglés para el informe en inglés
+_WARN_EN = [
+    (r"Pendiente sin unidad en «(.*)»: se toma mrad \(unidad preferente de ISO 10110-5\)\.",
+     r"Slope without unit in “\1”: mrad assumed (preferred unit in ISO 10110-5)."),
+    (r"Indicación de pendiente no reconocida \(formato ΔSv,w\(F/G/H\)\)\.",
+     "Slope indication not recognised (format ΔSv,w(F/G/H))."),
+    (r"Campo de prueba «\(all …\)» ignorado: se evalúa la apertura completa\.",
+     "Test field “(all …)” ignored: the whole aperture is evaluated."),
+    (r"Tolerancias de coeficientes de Zernike Z\(n,m\) no evaluadas\.",
+     "Zernike coefficient tolerances Z(n,m) not evaluated."),
+    (r"Texto no interpretado: «(.*)»\.", r"Text not interpreted: “\1”."),
+    (r"λ = (.*) nm parece fuera de rango: revisa las unidades \(sin unidad se toma nm\)\.",
+     r"λ = \1 nm looks out of range: check the units (nm assumed without unit)."),
+]
+
+
+def _warn_text(msg, lang):
+    """Traduce al inglés los avisos conocidos del análisis (si lang == 'en')."""
+    if lang != 'en':
+        return msg
+    import re
+    for rx, rep in _WARN_EN:
+        if re.fullmatch(rx, msg):
+            return re.sub(rx, rep, msg)
+    return msg
 
 # Nombres en inglés de los términos (los españoles vienen de fem_mirror_analysis)
 _ZERNIKE_EN = {
@@ -413,11 +451,15 @@ def build_report_data(params, coor, un, an, pos, rigid, mask, geom,
         'coverage': fma.mesh_coverage(xy, an, geom),
         'fit': None,
         'combo': params.get('combo_desc'),
+        'combo_en': params.get('combo_desc_en'),
+        'units': params.get('units'),
+        'version': getattr(fma, '__version__', ''),
         'optics': None,
     }
     if optics:
         data['optics'] = {k: optics[k] for k in ('iso', 'wfe_surface', 'wfe_residual', 'check',
                                                  'units', 'wavelength', 'incidence', 'spec')}
+        data['optics']['fringe_nm'] = optics.get('fringe_nm', optics['wavelength'] / 2.0)
         data['optics']['tol_warnings'] = (optics['tol'] or {}).get('warnings', [])
         psf = optics.get('psf') or {}
         data['optics']['strehl_fft'] = psf.get('strehl')
@@ -636,7 +678,8 @@ def generate_report(data, path, lang='es', units='mm', logo_png=None):
     hr.font.color.rgb = RGBColor(0x59, 0x59, 0x59)
     fp = sec.footer.paragraphs[0]
     fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    fr = fp.add_run(f"{T['footer']} · {T['page']} ")
+    ver = data.get('version') or getattr(fma, '__version__', '')
+    fr = fp.add_run(f"{T['footer']}{f' {ver}' if ver else ''} · {T['page']} ")
     fr.font.size = Pt(8)
     _add_page_field(fp)
 
@@ -655,6 +698,8 @@ def generate_report(data, path, lang='es', units='mm', logo_png=None):
     elif g['type'] == 'hexagonal':
         ap = T['ap_hex'].format(cx=cx, cy=cy, r=g['radius'], u=units,
                                 o='±X' if abs(g.get('rotation', 0)) < 1 else '±Y')
+    elif g['type'] == 'elliptical':
+        ap = T['ap_ell'].format(cx=cx, cy=cy, w=g['width'], h=g['height'], u=units)
     else:
         ap = T['ap_rect'].format(cx=cx, cy=cy, w=g['width'], h=g['height'], u=units)
     modes = [m for m, f in zip(['Tx', 'Ty', 'Tz', 'Rx', 'Ry', 'Rz'], data['rigid']) if f]
@@ -668,8 +713,9 @@ def generate_report(data, path, lang='es', units='mm', logo_png=None):
     rows = [[T['file'], os.path.basename(data['fname'] or '—')]]
     if data.get('case') is not None:
         rows.append([T['case'], f"{data['case']:g}"])
-    if data.get('combo'):
-        rows.append([T['combo'], ' · '.join(data['combo'])])
+    combo = (data.get('combo_en') if lang == 'en' else None) or data.get('combo')
+    if combo:
+        rows.append([T['combo'], ' · '.join(combo)])
     rows += [
         [T['date'], _dt.datetime.now().strftime('%Y-%m-%d %H:%M')],
         [T['nodes'], f"{data['n_valid']:,} / {data['n_read']:,}"],
@@ -742,7 +788,7 @@ def generate_report(data, path, lang='es', units='mm', logo_png=None):
         rb, ra = fit['rms_before'], fit['stats']['rms']
         red = (1 - ra / rb) * 100 if rb and rb > 0 else float('nan')
         _table(doc, _stats_rows(fit['stats'], T, units,
-                                extra=[[T['red'], f"{red:.1f} %"]]),
+                                extra=[[T['red'].format(a=_fmt(rb, units)), f"{red:.1f} %"]]),
                widths=[5.0, 12.0])
 
     # ── Calidad óptica e ISO 10110-5 ─────────────────────────────────────────
@@ -767,7 +813,7 @@ def generate_report(data, path, lang='es', units='mm', logo_png=None):
             doc.add_paragraph(f"{T['opt_fft'].format(on=on)}: {opt['strehl_fft']:.4f}")
 
         iso = opt['iso']
-        fr = lam / 2.0
+        fr = opt.get('fringe_nm') or lam / 2.0
         doc.add_heading(T['s_iso'].format(k=k_sec), level=1)
         k_sec += 1
         cyl = iso.get('form') == 'cyl'
@@ -822,7 +868,7 @@ def generate_report(data, path, lang='es', units='mm', logo_png=None):
         if opt.get('spec'):
             doc.add_paragraph(T['iso_check'].format(s=opt['spec']))
             for wmsg in opt.get('tol_warnings', []):
-                pw = doc.add_paragraph(f"⚠ {wmsg}")
+                pw = doc.add_paragraph(f"⚠ {_warn_text(wmsg, lang)}")
                 pw.runs[0].font.size = Pt(9)
             if opt['check']:
                 crow = []
@@ -843,15 +889,18 @@ def generate_report(data, path, lang='es', units='mm', logo_png=None):
     notes = []
     if fit:
         rb, ra = fit['rms_before'], fit['stats']['rms']
-        if rb and rb > 0:
-            notes.append(T['n_reduction'].format(n=len(fit['terms']),
-                                                 p=(1 - ra / rb) * 100,
+        p_red = (1 - ra / rb) * 100 if rb and rb > 0 else None
+        tiny = p_red is not None and p_red < 1.0
+        if tiny:
+            notes.append(T['n_tiny'].format(n=len(fit['terms']), p=p_red))
+        elif p_red is not None:
+            notes.append(T['n_reduction'].format(n=len(fit['terms']), p=p_red,
                                                  a=f"{rb:.3e} {units}", b=f"{ra:.3e} {units}"))
         con = fit.get('contrib')
         size = con[0] if con else [abs(c) for c in fit['coeffs']]
         cand = [(sz, t, c) for sz, t, c in zip(size, fit['terms'], fit['coeffs'])
                 if fma.term_nm(fit['basis'], t) != (0, 0)]
-        if cand:
+        if cand and not tiny:
             _, t, c = max(cand)
             notes.append(T['n_dom'].format(name=_term_name(fit['basis'], t, lang),
                                            c=f"{c:+.3e} {units}"))
